@@ -110,15 +110,13 @@ def aes_gcm_decrypt(blob: bytes, *, aad: bytes = _AAD) -> bytes:
 
 # ─── Serialisasi embedding ────────────────────────────────────────────────────
 
-def encrypt_embedding_list(embeddings: list[np.ndarray]) -> str:
+def encrypt_embedding_list(embeddings: list) -> str:
     """
-    Enkripsi list numpy embedding menjadi base64 string untuk disimpan di DB.
-
-    Alur:
-      np.ndarray[] → JSON bytes → AES-128-GCM → base64 string
+    Enkripsi list embedding menjadi base64 string untuk disimpan di DB.
     """
+    # Gunakan .tolist() jika e adalah numpy array, jika tidak, biarkan apa adanya (e)
     payload = json.dumps(
-        [e.tolist() for e in embeddings],
+        [e.tolist() if hasattr(e, 'tolist') else e for e in embeddings],
         separators=(",", ":")
     ).encode()
     blob = aes_gcm_encrypt(payload)
