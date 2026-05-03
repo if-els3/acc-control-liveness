@@ -43,17 +43,34 @@ class CameraStream:
             log.info("Kamera sudah aktif (singleton).")
             self.stopped = False
             return True
+            
         log.info(f"Memulai kamera dari sumber: {self.src}")
+        
+        # Coba buka kamera sesuai config
         self.stream = cv2.VideoCapture(self.src)
+        
+        # Fallback ke index lain jika gagal (0, 1, 2, atau -1)
+        if not self.stream.isOpened():
+            log.warning(f"Gagal membuka kamera pada index {self.src}. Mencoba fallback...")
+            fallback_indices = [0, 1, 2, -1]
+            if isinstance(self.src, int) and self.src in fallback_indices:
+                fallback_indices.remove(self.src)
+                
+            for idx in fallback_indices:
+                self.stream = cv2.VideoCapture(idx)
+                if self.stream.isOpened():
+                    log.info(f"Berhasil membuka kamera fallback pada index {idx}.")
+                    self.src = idx
+                    break
+
+        if not self.stream.isOpened():
+            log.error("Kamera gagal diakses di semua index. Pastikan hardware terhubung.")
+            return False
 
         # Set resolusi jika tersedia di config (optimasi untuk RPi)
         if hasattr(config, 'CAMERA_WIDTH') and hasattr(config, 'CAMERA_HEIGHT'):
             self.stream.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
             self.stream.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
-
-        if not self.stream.isOpened():
-            log.error("Kamera gagal diakses.")
-            return False
 
         # Baca frame pertama untuk memastikan buffer tidak kosong
         self.grabbed, self.frame = self.stream.read()
