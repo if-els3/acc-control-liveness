@@ -106,7 +106,13 @@ def main():
     
     try:
         from web.app import run_web
-        run_web(db, face_engine, door)
+        host = getattr(config, 'WEB_HOST', '0.0.0.0')
+        port = getattr(config, 'WEB_PORT', 5000)
+        run_web(db, face_engine, door, host=host, port=port)
+        print(f"  [4/4] Web Interface ...OK")
+        print(f"\n  🌐 Akses stream & status:")
+        print(f"     http://{host}:{port}/")
+        print(f"     http://{host}:{port}/display")
     except Exception as e:
         log.error(f"Gagal memulai web interface: {e}")
  
