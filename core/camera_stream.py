@@ -19,7 +19,7 @@ import config
 
 class CameraStream:
     def __init__(self):
-        self.src = getattr(config, 'CAMERA_SRC', 0)
+        self.src = getattr(config, 'CAMERA_INDEX', getattr(config, 'CAMERA_SRC', 0))
         self.stream = None
         self.grabbed = False
         self.frame = None
