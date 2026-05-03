@@ -103,6 +103,12 @@ def tampilkan_menu(face_engine):
  
 def main():
     db, face_engine, door = init_system()
+    
+    try:
+        from web.app import run_web
+        run_web(db, face_engine, door)
+    except Exception as e:
+        log.error(f"Gagal memulai web interface: {e}")
  
     def _sig(sig, frame):
         print("\n\n  [!] Ctrl+C — kembali ke menu")
