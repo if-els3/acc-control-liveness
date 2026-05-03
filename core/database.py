@@ -144,7 +144,9 @@ def run_aes_gcm_selftest() -> dict:
 class Database:
     def __init__(self, db_path: str = config.DB_PATH):
         self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        dir_path = os.path.dirname(db_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:
