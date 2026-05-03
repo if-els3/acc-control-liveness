@@ -18,16 +18,31 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
 class CameraStream:
+    _instance = None
+    _initialized = False
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self):
+        if self._initialized:
+            return
         self.src = getattr(config, 'CAMERA_INDEX', getattr(config, 'CAMERA_SRC', 0))
         self.stream = None
         self.grabbed = False
         self.frame = None
         self.stopped = False
         self.thread = None
+        self._initialized = True
 
     def start(self) -> bool:
         """Inisiasi stream kamera dan jalankan thread latar belakang."""
+        if self.stream is not None and self.stream.isOpened():
+            log.info("Kamera sudah aktif (singleton).")
+            self.stopped = False
+            return True
         log.info(f"Memulai kamera dari sumber: {self.src}")
         self.stream = cv2.VideoCapture(self.src)
 
@@ -75,8 +90,11 @@ class CameraStream:
             return self.frame.copy()
         return None
 
-    def stop(self):
+    def stop(self, force=False):
         """Hentikan thread dan rilis resource kamera."""
+        if not force:
+            log.info("Singleton stop diabaikan agar web/CLI tetap sinkron.")
+            return
         self.stopped = True
         if self.thread is not None:
             self.thread.join()
