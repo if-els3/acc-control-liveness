@@ -38,7 +38,7 @@ def _banner(mode=""):
     print(f"  Ctrl+C untuk berhenti")
     print(SEP2)
 
-def _proses_akses(uid_str, db, face_engine, liveness, door, cam):
+def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=None):
     """Proses satu siklus akses. Return status string."""
     user = db.get_user_by_rfid(uid_str)
     if user is None:
@@ -50,16 +50,44 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam):
     print(f"\n  {B}Kartu{NC}   : {uid_str}")
     print(f"  {B}Nama{NC}    : {nama}")
 
+    # Update state with user info
+    if state_callback:
+        state_callback(
+            step=f"Kartu terdeteksi: {nama}",
+            step_code="rfid",
+            user_name=nama,
+            similarity=None,
+                message="Silakan hadapkan wajah ke kamera"
+        )
+
     stored_embs = db.get_embeddings(uid_str)
     if not stored_embs:
         _ok(f"DITERIMA (RFID only) — {nama}")
         db.catat_log(uid_str, "GRANTED", "Tidak ada data wajah — RFID only",
                      user_id=user['id'], nama=nama)
         door.open(duration=config.DOOR_OPEN_SEC)
+        # Update state for granted access
+        if state_callback:
+            state_callback(
+                step="Akses Diberikan (RFID only)",
+                step_code="granted",
+                user_name=nama,
+                similarity=None,
+                message="Akses diberikan berdasarkan RFID saja"
+            )
         return "GRANTED"
 
     # Kumpulkan frame
     _info(f"Hadapkan wajah ke kamera ... ({config.LIVENESS_DURATION:.0f}s)")
+    # Update state for face verification
+    if state_callback:
+        state_callback(
+            step="Hadapkan wajah ke kamera",
+            step_code="verify",
+            user_name=nama,
+            similarity=None,
+                message=f"Mengumpulkan {config.ENROLL_FRAMES if hasattr(config, 'ENROLL_FRAMES') else 5} frame..."
+        )
     frames = []; face_box = None
     t0 = time.time()
     while time.time() - t0 < config.LIVENESS_DURATION:
@@ -77,13 +105,40 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam):
         _fail("GAGAL — Wajah tidak terdeteksi")
         db.catat_log(uid_str, "ERROR", "Tidak ada frame wajah",
                      user_id=user['id'], nama=nama)
+        # Update state for error
+        if state_callback:
+            state_callback(
+                step="Wajah tidak terdeteksi",
+                step_code="error",
+                user_name=nama,
+                similarity=None,
+                message="Tidak ada wajah yang terdeteksi selama pemindaian"
+            )
         return "ERROR"
 
     print(f"  ({len(frames)} frame dikumpulkan)")
+    # Update state after frame collection
+    if state_callback:
+        state_callback(
+            step=f"{len(frames)} frame dikumpulkan",
+            step_code="verify",
+            user_name=nama,
+            similarity=None,
+                message="Memulai pemrosesan liveness dan wajah..."
+        )
 
     # Liveness
     if config.LIVENESS_ENABLED:
         _info("Memeriksa liveness ...")
+        # Update state for liveness check
+        if state_callback:
+            state_callback(
+                step="Memeriksa liveness",
+                step_code="liveness",
+                user_name=nama,
+                similarity=None,
+                message="Menganalisis gerakan, tekstur, dan kedipan mata..."
+            )
         res = liveness.check(frames, face_box)
         td = res.detail
         print(f"  Liveness  : score={res.score:.2f} votes={res.votes}/{res.total}"
@@ -96,15 +151,51 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam):
             db.catat_log(uid_str, "DENIED_SPOOF",
                          f"Liveness score={res.score:.2f} votes={res.votes}/3",
                          user_id=user['id'], nama=nama)
+            # Update state for liveness failure
+            if state_callback:
+                state_callback(
+                    step=f"Liveness gagal (score={res.score:.2f})",
+                    step_code="denied",
+                    user_name=nama,
+                    similarity=None,
+                    message=f"Liveness terdeteksi sebagai spoof dengan score {res.score:.2f}"
+                )
             return "DENIED_SPOOF"
         _ok(f"Liveness OK ({res.score:.2f})")
+        # Update state for liveness success
+        if state_callback:
+            state_callback(
+                step="Liveness OK",
+                step_code="liveness",
+                user_name=nama,
+                similarity=None,
+                message=f"Liveness terdeteksi sebagai hidup dengan score {res.score:.2f}"
+            )
 
     # Face recognition
     _info("Memverifikasi wajah ...")
+    # Update state for face verification
+    if state_callback:
+        state_callback(
+            step="Memverifikasi wajah",
+            step_code="verify",
+            user_name=nama,
+            similarity=None,
+                message="Membandingkan wajah dengan data terdaftar..."
+        )
     match, score = face_engine.verify_multi_frame(frames, stored_embs, min_votes=2)
     pct = score * 100
     thr = config.FACE_MATCH_THRESH * 100
     print(f"  Face score : {pct:.1f}%  (threshold {thr:.0f}%)")
+    # Update state with similarity score
+    if state_callback:
+        state_callback(
+            step=f"Face score: {pct:.1f}%",
+            step_code="verify",
+            user_name=nama,
+            similarity=score,
+                message=f"Similarity: {pct:.1f}% (threshold: {thr:.0f}%)"
+        )
 
     if match:
         _ok(f"AKSES DITERIMA — {nama}  ({pct:.1f}%)")
@@ -112,12 +203,30 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam):
                      f"Face {pct:.1f}%, Liveness OK",
                      user_id=user['id'], nama=nama)
         door.open(duration=config.DOOR_OPEN_SEC)
+        # Update state for granted access
+        if state_callback:
+            state_callback(
+                step="Akses Diberikan",
+                step_code="granted",
+                user_name=nama,
+                similarity=score,
+                message=f"Wajah terverifikasi dengan similarity {pct:.1f}%"
+            )
         return "GRANTED"
     else:
         _fail(f"AKSES DITOLAK — Wajah tidak cocok ({pct:.1f}% < {thr:.0f}%)")
         db.catat_log(uid_str, "DENIED_FACE",
                      f"Face {pct:.1f}% < {thr:.0f}%",
                      user_id=user['id'], nama=nama)
+        # Update state for denied access
+        if state_callback:
+            state_callback(
+                step=f"Wajah tidak cocok ({pct:.1f}%)",
+                step_code="denied",
+                user_name=nama,
+                similarity=score,
+                message=f"Similarity {pct:.1f}% di bawah threshold {thr:.0f}%"
+            )
         return "DENIED_FACE"
 
 

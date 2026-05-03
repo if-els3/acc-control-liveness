@@ -305,24 +305,30 @@ def api_access_once():
         from menus.access import _proses_akses
         from core.liveness import LivenessDetector
         from core.rfid_reader import RFIDReader
-        
+
         update_state("Menunggu Kartu RFID", "rfid")
         with RFIDReader() as rfid:
             uid, _ = rfid.scan(timeout=60)
-        
+
         if not uid:
             update_state("Timeout RFID", "idle")
             return {"status": "timeout"}
-            
+
         liveness = LivenessDetector()
         if not _global_camera.stream or not _global_camera.stream.isOpened():
             _global_camera.start()
-            
-        status = _proses_akses(str(uid), _db, _face_engine, liveness, _door, _global_camera)
-        
+
+        # Define state callback to update web interface
+        def _web_state_callback(step: str, step_code: str = "idle",
+                               user_name: str = "", similarity=None,
+                               message: str = ""):
+            update_state(step, step_code, user_name, similarity, message)
+
+        status = _proses_akses(str(uid), _db, _face_engine, liveness, _door, _global_camera, _web_state_callback)
+
         if status == "GRANTED": update_state("Akses Diberikan", "granted")
         else: update_state(f"Ditolak: {status}", "denied")
-        
+
         time.sleep(3)
         update_state("Menunggu...", "idle")
         return {"status": status}
@@ -336,26 +342,32 @@ def api_access_start():
         from menus.access import _proses_akses
         from core.liveness import LivenessDetector
         from core.rfid_reader import RFIDReader
-        
+
         liveness = LivenessDetector()
         if not _global_camera.stream or not _global_camera.stream.isOpened():
             _global_camera.start()
-            
+
         _stop_event.clear()
         rfid = RFIDReader()
         rfid.start()
-        
+
+        # Define state callback to update web interface
+        def _web_state_callback(step: str, step_code: str = "idle",
+                               user_name: str = "", similarity=None,
+                               message: str = ""):
+            update_state(step, step_code, user_name, similarity, message)
+
         try:
             while not _stop_event.is_set():
                 update_state("Menunggu RFID...", "idle")
                 uid, _ = rfid.scan(timeout=1) # Short timeout to allow stop event checking
                 if uid is None: continue
-                
-                status = _proses_akses(str(uid), _db, _face_engine, liveness, _door, _global_camera)
-                
+
+                status = _proses_akses(str(uid), _db, _face_engine, liveness, _door, _global_camera, _web_state_callback)
+
                 if status == "GRANTED": update_state("Akses Diberikan", "granted")
                 else: update_state(f"Ditolak: {status}", "denied")
-                
+
                 # Wait before next scan
                 for _ in range(30):
                     if _stop_event.is_set(): break
@@ -363,7 +375,7 @@ def api_access_start():
         finally:
             rfid.stop()
             update_state("Sistem Berhenti", "idle")
-            
+
         return {"status": "stopped"}
 
     started, msg = run_task("access_loop", _access_loop)
