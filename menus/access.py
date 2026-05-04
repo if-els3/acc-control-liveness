@@ -172,7 +172,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 message=f"Liveness terdeteksi sebagai hidup dengan score {res.score:.2f}"
             )
 
-    # Face recognition
+    # Face recognition first
     _info("Memverifikasi wajah ...")
     # Update state for face verification
     if state_callback:
