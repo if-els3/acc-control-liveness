@@ -85,6 +85,35 @@ To simplify workflows and minimize token usage, adhere to the following rules wh
 5. **Self-Verification**: If modifying cryptography code, autonomously run `python test_aes_gcm.py` to verify the changes before completing the task.
 6. **Assume Raspberry Pi**: Code runs on resource-constrained hardware. Avoid adding heavy dependencies or memory-intensive operations.
 
+## Global Efficiency Rules
+
+- Always prioritize minimal context
+- Never scan entire project unless explicitly asked
+- Prefer summaries over full file reads
+- Limit output verbosity
+- Avoid duplicate analysis across agents
+
+## Ignore Rules
+Do not load or analyze:
+- *.db
+- *.onnx
+- *.pt
+- *.h5
+- MobileFaceNet_TF/*
+- large binary files
+
+When analyzing dependencies:
+- Prefer summaries over full file reads
+- Only expand full file if necessary
+
+## Context Rules
+
+- Only load files that are directly related to the task
+- Avoid scanning entire project unless explicitly requested
+- Prioritize:
+  - changed files
+  - directly imported modules
+
 ### Quick Workflow Commands
 
 - **Check Database Schema**: `grep -rn "CREATE TABLE" core/database.py`
