@@ -1,0 +1,30 @@
+{
+  "name": "acc-control-liveness",
+  "version": "1.0.0",
+  "description": "Raspberry Pi-based access control system combining RFID, face recognition, and liveness detection.",
+  "main": "main.py",
+  "scripts": {
+    "start": "python main.py",
+    "test": "python test_aes_gcm.py"
+  },
+  "keywords": [
+    "raspberry-pi",
+    "face-recognition",
+    "rfid",
+    "access-control",
+    "python"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "flask": "*",
+    "opencv-python": "*",
+    "cryptography": "*",
+    "torch": "*",
+    "scipy": "*",
+    "numpy": "*",
+    "tensorflow": "*",
+    "spidev": "*",
+    "RPi.GPIO": "*"
+  }
+}
