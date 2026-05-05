@@ -91,7 +91,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     verify_frames = []
     t0 = time.time()
     # Kumpulkan frame untuk verifikasi (target ENROLL_FRAMES atau timeout 3s)
-    target_v = config.ENROLL_FRAMES if hasattr(config, "ENROLL_FRAMES") else 5
+    target_v = config.ENROLL_FRAMES
     while len(verify_frames) < target_v and time.time() - t0 < 3.0:
         frame = cam.read()
         if frame is None:
@@ -114,7 +114,18 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             )
         return "ERROR"
 
-    match, score = face_engine.verify_multi_frame(verify_frames, stored_embs, min_votes=2)
+    # Callback for real-time similarity update
+    def _sim_callback(sc):
+        if state_callback:
+            state_callback(
+                step="Verifikasi Wajah",
+                step_code="verify",
+                user_name=nama,
+                similarity=sc,
+                message=f"Similarity: {sc*100:.1f}% (threshold: {config.FACE_MATCH_THRESH*100:.0f}%)"
+            )
+
+    match, score = face_engine.verify_multi_frame(verify_frames, stored_embs, min_votes=2, callback=_sim_callback)
     pct = score * 100
     thr = config.FACE_MATCH_THRESH * 100
     

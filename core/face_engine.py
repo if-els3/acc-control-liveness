@@ -316,13 +316,14 @@ class FaceEngine:
             
         return best_score >= config.FACE_MATCH_THRESH, float(best_score)
 
-    def verify_multi_frame(self, frames, stored_embeddings, min_votes=2):
+    def verify_multi_frame(self, frames, stored_embeddings, min_votes=2, callback=None):
         votes = 0
         scores = []
         for f in frames:
             match, sc = self.verify(f, stored_embeddings)
             scores.append(sc)
             if match: votes += 1
+            if callback: callback(float(sc))
         return votes >= min_votes, float(np.mean(scores)) if scores else 0.0
 
     @property

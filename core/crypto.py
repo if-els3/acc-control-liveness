@@ -55,6 +55,11 @@ def _load_key() -> bytes:
             pass
 
     # Fallback: kunci acak (hanya untuk development, TIDAK untuk produksi)
+    if os.environ.get("DEV_MODE") != "1":
+        raise ValueError(
+            "AES_KEY_HEX must be set to a valid 32-char hex string for production. "
+            "Set DEV_MODE=1 to allow random key for development only."
+        )
     log.warning(
         "AES_KEY_HEX tidak diatur atau tidak valid. "
         "Menggunakan kunci acak (data tidak persisten)."

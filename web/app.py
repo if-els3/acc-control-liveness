@@ -54,7 +54,7 @@ def update_state(step: str, step_code: str = "idle",
             "step"       : step,
             "step_code"  : step_code,
             "user_name"  : user_name,
-            "similarity" : round(similarity, 3) if similarity else None,
+            "similarity" : round(similarity, 3) if similarity is not None else None,
             "message"    : message,
             "ts"         : time.time(),
         })
@@ -69,11 +69,31 @@ def _mjpeg_generator():
     interval = 1.0 / getattr(config, 'STREAM_MAX_FPS', 10)
     if not _global_camera.stream or not _global_camera.stream.isOpened():
         _global_camera.start()
-        
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
     while True:
         t0    = time.time()
         frame = _global_camera.read()
         if frame is not None:
+            # Draw face box if face engine available
+            if _face_engine and _face_engine.is_loaded():
+                box = _face_engine.detect_largest(frame)
+                if box:
+                    x1, y1, x2, y2, score = [int(v) for v in box]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(frame, f"Face {score:.2f}", (x1, y1-10), font, 0.5, (0,255,0), 1)
+
+            # Overlay similarity from state
+            state = get_state()
+            sim = state.get("similarity")
+            if sim is not None:
+                pct = int(sim * 100)
+                color = (0,255,0) if pct >= 72 else (0,255,255) if pct >= 55 else (0,0,255)
+                cv2.putText(frame, f"Similarity: {pct}%", (10, 30), font, 0.7, color, 2)
+            step = state.get("step", "")
+            if step:
+                cv2.putText(frame, step, (10, frame.shape[0]-20), font, 0.5, (255,255,255), 1)
+
             ret, jpeg = cv2.imencode('.jpg', frame)
             if ret:
                 yield (
@@ -119,7 +139,8 @@ def api_users():
 
 @app.route("/api/config")
 def api_config():
-    conf = {k: v for k, v in vars(config).items() if not k.startswith('__')}
+    SENSITIVE = {"AES_KEY_HEX", "SECRET_KEY", "API_KEY", "DATABASE_URL"}
+    conf = {k: v for k, v in vars(config).items() if not k.startswith('__') and k not in SENSITIVE}
     return jsonify(conf)
 
 @app.route("/api/system/info")
