@@ -191,10 +191,14 @@ class BlinkDetector:
     """
     Deteksi kedipan menggunakan haarcascade mata.
     Blink = mata terdeteksi di frame N, tidak terdeteksi di N+1, terdeteksi lagi N+2.
+    Mendukung kacamata dengan fallback cascade.
     """
 
     def __init__(self):
-        path = _find_cascade("haarcascade_eye.xml")
+        # Coba kacamata dulu, fallback ke standar
+        path = _find_cascade("haarcascade_eye_tree_eyeglasses.xml")
+        if not path:
+            path = _find_cascade("haarcascade_eye.xml")
         self._cascade = cv2.CascadeClassifier(path) if path else None
         self._history: List[bool] = []    # True = mata terdeteksi
         self._blinks  = 0
@@ -204,20 +208,28 @@ class BlinkDetector:
         if self._cascade is None:
             return True
         gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
+        # Equalise untuk kondisi pencahayaan berbeda
+        gray = cv2.equalizeHist(gray)
         eyes = self._cascade.detectMultiScale(
             gray,
             scaleFactor=1.1,
-            minNeighbors=4,
-            minSize=(15, 15),
+            minNeighbors=2,
+            minSize=(12, 12),
             flags=cv2.CASCADE_SCALE_IMAGE,
         )
         eye_present = len(eyes) > 0
         self._history.append(eye_present)
 
-        # Deteksi blink: True → False → True
+        # Deteksi blink: True → False → True  (1-frame closure)
         if len(self._history) >= 3:
             a, b, c = self._history[-3], self._history[-2], self._history[-1]
             if a and not b and c:
+                self._blinks += 1
+
+        # Juga deteksi: True → False → False → True  (2-frame closure)
+        if len(self._history) >= 4:
+            a, b, c, d = self._history[-4], self._history[-3], self._history[-2], self._history[-1]
+            if a and not b and not c and d:
                 self._blinks += 1
 
         return eye_present

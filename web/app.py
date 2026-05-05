@@ -466,10 +466,13 @@ _HTML = r"""<!DOCTYPE html>
                  padding: 5px 0; border-bottom: 1px solid var(--border); font-size: .8rem; }
   .log-list li:last-child { border: none; }
   .tag { padding: 2px 7px; border-radius: 4px; font-size: .7rem; font-weight: 600; }
-  .tag.GRANTED { background: #14532d; color: var(--green); }
-  .tag.DENIED  { background: #450a0a; color: var(--red); }
-  .tag.LIVENESS_FAIL { background: #422006; color: var(--yellow); }
-  .tag.UNKNOWN_RFID  { background: #1e1b4b; color: #a5b4fc; }
+  .tag.GRANTED      { background: #14532d; color: var(--green); }
+  .tag.DENIED_FACE  { background: #450a0a; color: var(--red); }
+  .tag.DENIED_RFID  { background: #1e1b4b; color: #a5b4fc; }
+  .tag.LIVENESS_FAIL{ background: #422006; color: var(--yellow); }
+  .tag.ERROR        { background: #3b0764; color: #e879f9; }
+  .tag.DENIED       { background: #450a0a; color: var(--red); }
+  .tag.ENROLL       { background: #0c4a6e; color: #7dd3fc; }
 
   .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .stat { background: var(--bg); border-radius: 8px; padding: 10px 12px; }
@@ -580,8 +583,8 @@ async function refreshLogs() {
     const ul = document.getElementById("log-list");
     ul.innerHTML = logs.map(l => `
       <li>
-        <span>${l.user_name || l.rfid_uid}</span>
-        <span class="tag ${l.result}">${l.result}</span>
+        <span>${l.nama || l.rfid_uid || '—'}</span>
+        <span class="tag ${l.status}">${l.status}</span>
       </li>`).join("");
   } catch(e) {}
 }
@@ -589,9 +592,9 @@ async function refreshLogs() {
 async function refreshStats() {
   try {
     const s = await fetch("/api/stats").then(r=>r.json());
-    document.getElementById("s-users"  ).textContent = s.total_users;
-    document.getElementById("s-total"  ).textContent = s.total_log;
-    document.getElementById("s-granted").textContent = s.granted;
+    document.getElementById("s-users"  ).textContent = s.total_user  ?? s.total_users ?? '–';
+    document.getElementById("s-total"  ).textContent = s.total_log   ?? '–';
+    document.getElementById("s-granted").textContent = s.granted     ?? '–';
     document.getElementById("s-denied" ).textContent = (s.denied_face || 0) + (s.denied_rfid || 0);
   } catch(e) {}
 }

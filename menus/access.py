@@ -210,8 +210,11 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
           f" blk={td.get('blink_score',0):.2f}"
           f" blinks={blinks}]")
 
-    # Syarat mutlak: harus ada kedipan
-    if blinks == 0:
+    # Syarat blink: harus ada kedipan ATAU blink cascade tidak tersedia
+    blink_score = td.get('blink_score', 0)
+    cascade_ok = td.get('blink') != 'cascade_unavailable'
+    
+    if cascade_ok and blinks == 0 and blink_score < 0.5:
         _fail("DITOLAK — Tidak ada kedipan terdeteksi!")
         db.catat_log(uid_str, "DENIED_SPOOF", "Gagal: Tidak ada kedipan",
                      user_id=user['id'], nama=nama)
