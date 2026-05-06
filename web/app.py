@@ -38,26 +38,42 @@ _stop_event = threading.Event()
 # ── Shared state (ditulis dari menus/access.py atau endpoints) ───────────
 _state_lock = threading.Lock()
 _state = {
-    "step"       : "Menunggu kartu RFID…",
-    "step_code"  : "idle",
-    "user_name"  : "",
-    "similarity" : None,
-    "message"    : "",
-    "ts"         : 0,
+    "step"            : "Menunggu kartu RFID…",
+    "step_code"       : "idle",
+    "user_name"       : "",
+    "similarity"      : None,
+    "blinks"          : 0,
+    "liveness_status" : "",
+    "message"         : "",
+    "ts"              : 0,
+}
+
+# ── Real-time overlay for face box in MJPEG stream ──────────────────────────
+_rt_lock = threading.Lock()
+_rt_overlay = {
+    "similarity"      : None,   # float 0-1
+    "blinks"          : 0,
+    "liveness_status" : "",
+    "active"          : False,
 }
 
 def update_state(step: str, step_code: str = "idle",
                  user_name: str = "", similarity=None,
-                 message: str = ""):
+                 blinks=None, liveness_status=None, message: str = ""):
     with _state_lock:
-        _state.update({
-            "step"       : step,
-            "step_code"  : step_code,
-            "user_name"  : user_name,
-            "similarity" : round(similarity, 3) if similarity is not None else None,
-            "message"    : message,
-            "ts"         : time.time(),
-        })
+        upd = {
+            "step"      : step,
+            "step_code" : step_code,
+            "user_name" : user_name,
+            "similarity": round(similarity, 3) if similarity is not None else None,
+            "message"   : message,
+            "ts"        : time.time(),
+        }
+        if blinks is not None:
+            upd["blinks"] = blinks
+        if liveness_status is not None:
+            upd["liveness_status"] = liveness_status
+        _state.update(upd)
 
 def get_state() -> dict:
     with _state_lock:
@@ -76,14 +92,41 @@ def _mjpeg_generator():
         frame = _global_camera.read()
         if frame is not None:
             # Draw face box if face engine available
+            face_box_data = None
             if _face_engine and _face_engine.is_loaded():
                 box = _face_engine.detect_largest(frame)
                 if box:
                     x1, y1, x2, y2, score = [int(v) for v in box]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     cv2.putText(frame, f"Face {score:.2f}", (x1, y1-10), font, 0.5, (0,255,0), 1)
+                    face_box_data = (x1, y1, x2, y2)
 
-            # Overlay similarity from state
+            # Real-time overlay on face box
+            with _rt_lock:
+                rt = dict(_rt_overlay)
+
+            if rt.get("active") and face_box_data:
+                x1, y1, x2, y2 = face_box_data
+                lines = []
+                sim = rt.get("similarity")
+                if sim is not None:
+                    pct = int(sim * 100)
+                    color = (0,255,0) if pct >= 72 else (0,255,255) if pct >= 55 else (0,0,255)
+                    lines.append(f"Sim: {pct}%")
+                blinks = rt.get("blinks", 0)
+                if blinks:
+                    lines.append(f"Blinks: {blinks}")
+                lv_status = rt.get("liveness_status", "")
+                if lv_status:
+                    c = (0,255,0) if lv_status == "LIVE" else (0,0,255)
+                    lines.append(f"L: {lv_status}")
+                # Draw overlay text below face box
+                for i, txt in enumerate(lines):
+                    y = y2 + 15 + i * 18
+                    color = (0,255,0) if "LIVE" in txt else (0,0,255) if "SPOOF" in txt else (255,255,0)
+                    cv2.putText(frame, txt, (x1, y), font, 0.5, color, 1)
+
+            # Overlay similarity from state (top-left)
             state = get_state()
             sim = state.get("similarity")
             if sim is not None:
@@ -114,9 +157,34 @@ def stream():
 
 # ── Read-only Endpoints ───────────────────────────────────────────────────────
 
-@app.route("/api/state")
+@app.route("/api/state", methods=["GET", "POST"])
 def api_state():
+    if request.method == "POST":
+        data = request.json or {}
+        kwargs = {}
+        for key in ["step", "step_code", "user_name", "similarity", "message"]:
+            if key in data:
+                kwargs[key] = data[key]
+        if "blinks" in data:
+            kwargs["blinks"] = data["blinks"]
+        if "liveness_status" in data:
+            kwargs["liveness_status"] = data["liveness_status"]
+        update_state(**kwargs)
+        return jsonify({"status": "ok"})
     return jsonify(get_state())
+
+
+@app.route("/api/rt-overlay", methods=["GET", "POST"])
+def api_rt_overlay():
+    if request.method == "POST":
+        data = request.json or {}
+        with _rt_lock:
+            for k in ["similarity", "blinks", "liveness_status", "active"]:
+                if k in data:
+                    _rt_overlay[k] = data[k]
+        return jsonify({"status": "ok"})
+    with _rt_lock:
+        return jsonify(dict(_rt_overlay))
 
 @app.route("/api/logs")
 def api_logs():
@@ -342,8 +410,11 @@ def api_access_once():
         # Define state callback to update web interface
         def _web_state_callback(step: str, step_code: str = "idle",
                                user_name: str = "", similarity=None,
+                               blinks=None, liveness_status=None,
                                message: str = ""):
-            update_state(step, step_code, user_name, similarity, message)
+            update_state(step, step_code, user_name, similarity,
+                         blinks=blinks, liveness_status=liveness_status,
+                         message=message)
 
         status = _proses_akses(str(uid), _db, _face_engine, liveness, _door, _global_camera, _web_state_callback)
 
@@ -375,8 +446,11 @@ def api_access_start():
         # Define state callback to update web interface
         def _web_state_callback(step: str, step_code: str = "idle",
                                user_name: str = "", similarity=None,
+                               blinks=None, liveness_status=None,
                                message: str = ""):
-            update_state(step, step_code, user_name, similarity, message)
+            update_state(step, step_code, user_name, similarity,
+                         blinks=blinks, liveness_status=liveness_status,
+                         message=message)
 
         try:
             while not _stop_event.is_set():
