@@ -1,0 +1,9 @@
+flask
+opencv-python
+cryptography
+torch
+scipy
+numpy
+tensorflow
+spidev
+RPi.GPIO
