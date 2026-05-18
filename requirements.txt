@@ -1,9 +1,15 @@
+# Gunakan CPU-only untuk PyTorch agar menghemat ~2.5 GB ruang disk di Windows/Linux (tanpa CUDA)
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 flask
-opencv-python
+opencv-python-headless
 cryptography
 torch
-scipy
 numpy
-tensorflow
-spidev
-RPi.GPIO
+
+# Gunakan runtime TFLite yang sangat ringan (~5 MB) alih-alih TensorFlow (~1 GB)
+tflite-runtime
+
+# Paket khusus hardware Raspberry Pi (dilewati otomatis di Windows/macOS untuk mempermudah dev lokal)
+spidev; sys_platform == 'linux'
+RPi.GPIO; sys_platform == 'linux'

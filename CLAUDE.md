@@ -67,11 +67,12 @@ All hardware pins, thresholds, and paths in `config.py`:
 - `CAMERA_INDEX`, `CAMERA_WIDTH`, `CAMERA_HEIGHT`
 
 ## Key Dependencies
-- `tflite-runtime` or `tensorflow` (MobileFaceNet)
-- `torch` + BlazeFace model (face detection)
-- `opencv-python` (image processing, liveness)
-- `cryptography` (AES-GCM)
-- `Flask` (web interface)
+- `tflite-runtime` (MobileFaceNet - lightweight inference runtime, ~5 MB)
+- `torch` (CPU-only, face detection - optimized via download.pytorch.org to save ~2.5 GB)
+- `opencv-python-headless` (image processing, liveness - lightweight, no GUI backend overhead)
+- `cryptography` (AES-GCM for encrypted face embeddings)
+- `Flask` (web interface status display and MJPEG streaming)
+- `spidev` & `RPi.GPIO` (Raspberry Pi specific, automatically skipped on Windows/macOS)
 
 ## Claude Code Guidelines (Token & Workflow Optimization)
 
