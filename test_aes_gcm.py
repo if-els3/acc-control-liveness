@@ -237,10 +237,157 @@ class TestAESGCM128(unittest.TestCase):
         )
 
 
+# ─── CLI helpers ──────────────────────────────────────────────────────────────
+
+def _encrypt_cli(args):
+    """CLI encryption: print ciphertext + tag as hex."""
+    try:
+        key = bytes.fromhex(args.key)
+        iv  = bytes.fromhex(args.iv)
+        msg = bytes.fromhex(args.msg)
+        aad = bytes.fromhex(args.aad) if args.aad else b""
+    except ValueError as e:
+        print(f"Error: invalid hex input — {e}")
+        return 1
+
+    if len(key) != 16:
+        print(f"Error: key must be 16 bytes (got {len(key)})")
+        return 1
+
+    ct, tag = aes_gcm_encrypt(key, iv, msg, aad)
+    print(f"ciphertext: {ct.hex()}")
+    print(f"tag:        {tag.hex()}")
+    return 0
+
+
+def _decrypt_cli(args):
+    """CLI decryption: print plaintext as hex or 'AUTH_FAIL'."""
+    try:
+        key = bytes.fromhex(args.key)
+        iv  = bytes.fromhex(args.iv)
+        ct  = bytes.fromhex(args.ct)
+        tag = bytes.fromhex(args.tag)
+        aad = bytes.fromhex(args.aad) if args.aad else b""
+    except ValueError as e:
+        print(f"Error: invalid hex input — {e}")
+        return 1
+
+    if len(key) != 16:
+        print(f"Error: key must be 16 bytes (got {len(key)})")
+        return 1
+
+    pt = aes_gcm_decrypt(key, iv, ct, tag, aad)
+    if pt is None:
+        print("AUTH_FAIL")
+        return 1
+    print(f"plaintext: {pt.hex()}")
+    return 0
+
+
+def _interactive_cli(_args=None):
+    """Interactive prompt: ask action + params, loop until Ctrl+C."""
+    print("Interactive AES-128-GCM. Actions: encrypt / decrypt / quit")
+    while True:
+        try:
+            action = input("\nencrypt/decrypt/quit? ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        if action in ("q", "quit", "exit"):
+            break
+        if action not in ("encrypt", "decrypt"):
+            print("  Valid: encrypt, decrypt, quit")
+            continue
+
+        try:
+            key_hex = input("  key (hex, 32 chars = 16 bytes): ").strip()
+            iv_hex  = input("  iv  (hex): ").strip()
+            aad_hex = input("  aad (hex, empty=skip): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+
+        aad_hex = aad_hex or ""
+
+        try:
+            key, iv, aad = bytes.fromhex(key_hex), bytes.fromhex(iv_hex), bytes.fromhex(aad_hex)
+            if len(key) != 16:
+                print("  Error: key must be 16 bytes (32 hex chars)")
+                continue
+        except ValueError as e:
+            print(f"  Error: {e}")
+            continue
+
+        if action == "encrypt":
+            try:
+                msg_hex = input("  plaintext (hex): ").strip()
+                msg = bytes.fromhex(msg_hex)
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            except ValueError as e:
+                print(f"  Error: {e}")
+                continue
+            ct, tag = aes_gcm_encrypt(key, iv, msg, aad)
+            print(f"  ciphertext: {ct.hex()}")
+            print(f"  tag:        {tag.hex()}")
+        else:
+            try:
+                ct_hex  = input("  ciphertext (hex): ").strip()
+                tag_hex = input("  tag       (hex): ").strip()
+                ct, tag = bytes.fromhex(ct_hex), bytes.fromhex(tag_hex)
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            except ValueError as e:
+                print(f"  Error: {e}")
+                continue
+            pt = aes_gcm_decrypt(key, iv, ct, tag, aad)
+            if pt is None:
+                print("  AUTH_FAIL (tag mismatch)")
+            else:
+                print(f"  plaintext: {pt.hex()}")
+    return 0
+
+
 # ─── Entrypoint ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("  AES-128-GCM Unit Test  (NIST SP 800-38D / Wycheproof)")
-    print("=" * 60)
-    unittest.main(verbosity=2)
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="AES-128-GCM tool + Wycheproof test suite"
+    )
+    sub = parser.add_subparsers(dest="command")
+
+    p_enc = sub.add_parser("encrypt", help="Encrypt plaintext")
+    p_enc.add_argument("--key", required=True, help="Key in hex (32 hex chars = 16 bytes)")
+    p_enc.add_argument("--iv", required=True, help="IV in hex")
+    p_enc.add_argument("--msg", required=True, help="Plaintext in hex")
+    p_enc.add_argument("--aad", default="", help="AAD in hex (default empty)")
+
+    p_dec = sub.add_parser("decrypt", help="Decrypt ciphertext")
+    p_dec.add_argument("--key", required=True, help="Key in hex (32 hex chars)")
+    p_dec.add_argument("--iv", required=True, help="IV in hex")
+    p_dec.add_argument("--ct", required=True, help="Ciphertext in hex")
+    p_dec.add_argument("--tag", required=True, help="Tag in hex")
+    p_dec.add_argument("--aad", default="", help="AAD in hex (default empty)")
+
+    sub.add_parser("interactive", help="Interactive prompt mode")
+    sub.add_parser("test", help="Run unit tests against Wycheproof vectors")
+
+    args = parser.parse_args()
+
+    if args.command == "encrypt":
+        exit(_encrypt_cli(args))
+    elif args.command == "decrypt":
+        exit(_decrypt_cli(args))
+    elif args.command == "interactive":
+        exit(_interactive_cli())
+    else:
+        # default: run unit tests
+        print("=" * 60)
+        print("  AES-128-GCM Unit Test  (NIST SP 800-38D / Wycheproof)")
+        print("=" * 60)
+        unittest.main(verbosity=2)
