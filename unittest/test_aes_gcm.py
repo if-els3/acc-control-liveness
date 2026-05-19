@@ -284,6 +284,89 @@ def _decrypt_cli(args):
     return 0
 
 
+def _vector_cli(args):
+    """Run specific test vector from JSON by tcId. Output structured result."""
+    vectors = load_test_vectors(TEST_VECTOR_FILE, key_size=128)
+    matches = [v for v in vectors if v["tcId"] == args.tc_id]
+    if not matches:
+        print(f"Error: tcId={args.tc_id} not found in {TEST_VECTOR_FILE}")
+        return 1
+    v = matches[0]
+
+    ct, tag = aes_gcm_encrypt(v["key"], v["iv"], v["msg"], v["aad"])
+    pt = aes_gcm_decrypt(v["key"], v["iv"], v["ct"], v["tag"], v["aad"])
+
+    ct_ok = ct == v["ct"]
+    tag_ok = tag == v["tag"]
+    decrypt_ok = pt == v["msg"]
+    valid_input = _is_supported_iv(v)
+
+    if args.json:
+        import json as _json
+        out = {
+            "tcId": v["tcId"],
+            "comment": v["comment"],
+            "flags": sorted(v["flags"]),
+            "supportedIv": valid_input,
+            "input": {
+                "key": v["key"].hex(),
+                "iv": v["iv"].hex(),
+                "aad": v["aad"].hex() if v["aad"] else "",
+                "msg": v["msg"].hex() if v["msg"] else "",
+            },
+            "expected": {
+                "ct": v["ct"].hex() if v["ct"] else "",
+                "tag": v["tag"].hex(),
+                "result": v["result"],
+            },
+            "actual": {
+                "ct": ct.hex(),
+                "tag": tag.hex(),
+                "decrypted": pt.hex() if pt is not None else None,
+            },
+            "verification": {
+                "encryptionMatch": ct_ok and tag_ok,
+                "decryptionMatch": decrypt_ok,
+            },
+        }
+        print(_json.dumps(out, indent=2))
+    else:
+        supported = "yes" if valid_input else "NO (skip reason: IV out of 8-128 byte range)"
+        print(f"""
+tcId      : {v['tcId']}
+comment   : {v['comment']}
+flags     : {sorted(v['flags'])}
+result    : {v['result']}
+IV ok?    : {supported}
+
+--- Input ---
+key       : {v['key'].hex()}
+iv        : {v['iv'].hex()}
+aad       : {v['aad'].hex() if v['aad'] else '(empty)'}
+msg       : {v['msg'].hex() if v['msg'] else '(empty)'}
+
+--- Encryption Result ---
+expected ct : {v['ct'].hex() if v['ct'] else '(empty)'}
+actual   ct : {ct.hex()}
+match      : {'PASS' if ct_ok else 'FAIL'}
+
+expected tag: {v['tag'].hex()}
+actual   tag: {tag.hex()}
+match      : {'PASS' if tag_ok else 'FAIL'}
+
+--- Decryption Result ---
+expected pt: {v['msg'].hex() if v['msg'] else '(empty)'}
+actual   pt: {pt.hex() if pt is not None else 'AUTH_FAIL'}
+match      : {'PASS' if decrypt_ok else 'FAIL'}
+""".strip())
+
+    if v["result"] == "valid":
+        return 0 if ct_ok and tag_ok and decrypt_ok else 1
+    elif v["result"] == "invalid":
+        return 0 if pt is None else 1
+    return 0
+
+
 def _interactive_cli(_args=None):
     """Interactive prompt: ask action + params, loop until Ctrl+C."""
     print("Interactive AES-128-GCM. Actions: encrypt / decrypt / quit")
@@ -374,6 +457,10 @@ if __name__ == "__main__":
     p_dec.add_argument("--tag", required=True, help="Tag in hex")
     p_dec.add_argument("--aad", default="", help="AAD in hex (default empty)")
 
+    p_vec = sub.add_parser("vector", help="Run specific test vector from JSON by tcId")
+    p_vec.add_argument("--tc-id", type=int, required=True, help="Test case ID from aes_gcm_test.json")
+    p_vec.add_argument("--json", action="store_true", help="Output as JSON matching test vector schema")
+
     sub.add_parser("interactive", help="Interactive prompt mode")
     sub.add_parser("test", help="Run unit tests against Wycheproof vectors")
 
@@ -383,6 +470,8 @@ if __name__ == "__main__":
         exit(_encrypt_cli(args))
     elif args.command == "decrypt":
         exit(_decrypt_cli(args))
+    elif args.command == "vector":
+        exit(_vector_cli(args))
     elif args.command == "interactive":
         exit(_interactive_cli())
     else:
@@ -390,4 +479,5 @@ if __name__ == "__main__":
         print("=" * 60)
         print("  AES-128-GCM Unit Test  (NIST SP 800-38D / Wycheproof)")
         print("=" * 60)
-        unittest.main(verbosity=2)
+        import sys
+        unittest.main(argv=[sys.argv[0]], verbosity=2)
