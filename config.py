@@ -72,6 +72,21 @@ APP_VERSION = "1.0.0"
 
 # ─── Liveness Detection ───────────────────────────────────
 LIVENESS_ENABLED       = True    # False = skip liveness, RFID+face saja
-LIVENESS_DURATION      = 3.0    # detik pengambilan frame untuk liveness
-LIVENESS_MIN_SCORE     = 0.35   # threshold skor gabungan
-LIVENESS_MIN_VOTES     = 2      # minimum metode yang vote LIVE (dari 3)
+LIVENESS_DURATION      = 4.5    # detik pengambilan frame untuk liveness (lebih panjang untuk menangkap blink)
+LIVENESS_MIN_SCORE     = 0.50   # threshold skor blink final
+LIVENESS_MIN_VOTES     = 1      # blink-only: cukup 1 vote LIVE
+
+# Blink-specific tuning (kacamata + low-light)
+LIVENESS_BLINK_MIN_COUNT      = 1      # minimal blink event agar dianggap live
+LIVENESS_BLINK_SCORE_THRESH   = 0.50   # threshold score dari modul blink
+LIVENESS_BLINK_NO_EVENT_SCORE = 0.58   # score fallback saat mata terlihat tapi belum berkedip
+
+# Haar eye detection tuning
+BLINK_EYE_SCALE_FACTOR  = 1.08
+BLINK_EYE_MIN_NEIGHBORS = 1
+BLINK_EYE_MIN_SIZE      = (10, 10)
+
+# Pre-processing untuk low-light
+BLINK_CLAHE_CLIP_LIMIT  = 3.0
+BLINK_CLAHE_TILE_GRID   = (8, 8)
+BLINK_GAMMA             = 1.25
