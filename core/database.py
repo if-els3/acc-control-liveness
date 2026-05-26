@@ -23,7 +23,11 @@ from core.crypto import encrypt_embedding_list, decrypt_embedding_list
 log = logging.getLogger(__name__)
 
 # ─── Path ke file test vector Wycheproof ─────────────────────────────────────
-_AES_GCM_TEST_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "aes_gcm_test.json")
+_AES_GCM_TEST_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),
+    "unittest",
+    "aes_gcm_test.json",
+)
 _UNSUPPORTED_IV_FLAGS = {"ZeroLengthIv", "SmallIv", "LongIv"}
 
 
@@ -183,7 +187,10 @@ class Database:
                 (nama, str(rfid_uid), emb_blob, now, now)
             )
         log.info(f"User ditambah: {nama} (UID={rfid_uid})")
-        return cur.lastrowid
+        lastid = cur.lastrowid
+        if lastid is None:
+            raise RuntimeError("Failed to insert user, no lastrowid returned")
+        return int(lastid)
 
     def update_embedding(self, rfid_uid: str, embeddings: List[np.ndarray]):
         now = datetime.now().isoformat()
