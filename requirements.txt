@@ -5,7 +5,7 @@ flask
 opencv-python-headless
 cryptography
 torch
-numpy
+numpy==1.26.4
 
 # Gunakan runtime TFLite yang sangat ringan (~5 MB) alih-alih TensorFlow (~1 GB)
 tflite-runtime
