@@ -2,26 +2,14 @@
 =============================================================
 core/liveness.py — Liveness Detection (Anti-Spoofing)
 =============================================================
-Tiga metode dikombinasikan (voting):
+    [A] Eye Blink Detection
+            Wajah asli berkedip. Foto tidak.
+            → Haarcascade deteksi mata per frame
+            → Hitung berapa kali mata hilang-muncul (blink event)
 
-  [A] LBP Texture Analysis
-      Wajah asli punya tekstur micro (pori, bulu halus)
-      berbeda dari foto cetak / layar LCD.
-      → Analisis distribusi histogram LBP
-      → Hitung variance & high-freq energy
-
-  [B] Optical Flow Motion Analysis
-      Wajah asli punya micro-movement natural (nafas,
-      kedipan, tremor kecil). Foto = statis.
-      → Farneback optical flow antar frame berurutan
-      → Ukur std-dev magnitude gerakan
-
-  [C] Eye Blink Detection
-      Wajah asli berkedip. Foto tidak.
-      → Haarcascade deteksi mata per frame
-      → Hitung berapa kali mata hilang-muncul (blink event)
-
-Semua metode murni OpenCV — tidak butuh model tambahan / internet.
+Optimasi untuk kondisi low-light dan pengguna berkacamata:
+    - CLAHE + gamma correction pada area mata
+    - parameter cascade dibuat configurable dari config.py
 
 Penggunaan:
     liveness = LivenessDetector()
@@ -45,6 +33,7 @@ log = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
+cv2 = None
 try:
     import cv2
     CV2_OK = True
@@ -54,6 +43,8 @@ except ImportError:
 
 # ─── Haarcascade path ────────────────────────────────────
 def _find_cascade(filename: str) -> str:
+    if not CV2_OK or cv2 is None:
+        return ""
     cv_dir = os.path.dirname(cv2.__file__)
     for root, _, files in os.walk(cv_dir):
         if filename in files:
@@ -77,114 +68,7 @@ class LivenessResult:
 
 
 # ══════════════════════════════════════════════════════════
-# METODE A — LBP TEXTURE
-# ══════════════════════════════════════════════════════════
-
-def _lbp_map(gray: np.ndarray) -> np.ndarray:
-    """
-    Hitung LBP (Local Binary Pattern) manual menggunakan numpy.
-    Lebih cepat dari loop Python, tidak butuh scikit-image.
-    Menggunakan 8 tetangga dengan radius 1.
-    """
-    h, w    = gray.shape
-    lbp     = np.zeros((h-2, w-2), dtype=np.uint8)
-    center  = gray[1:-1, 1:-1].astype(np.int16)
-    neighbors = [
-        gray[0:-2, 0:-2], gray[0:-2, 1:-1], gray[0:-2, 2:],
-        gray[1:-1, 2:],   gray[2:,   2:],   gray[2:,   1:-1],
-        gray[2:,   0:-2], gray[1:-1, 0:-2],
-    ]
-    for i, nb in enumerate(neighbors):
-        lbp += ((nb.astype(np.int16) >= center) * (1 << i)).astype(np.uint8)
-    return lbp
-
-
-def _texture_score(face_bgr: np.ndarray) -> Tuple[float, dict]:
-    """
-    Hitung skor tekstur wajah berdasarkan distribusi LBP.
-    Wajah asli → distribusi lebih merata (entropy tinggi).
-    Foto/layar → distribusi terpusat (entropy rendah, banyak uniform patterns).
-    """
-    gray   = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
-    resized = cv2.resize(gray, (64, 64))
-
-    lbp    = _lbp_map(resized)
-    hist, _ = np.histogram(lbp.flatten(), bins=256, range=(0, 256))
-    hist    = hist.astype(np.float32) + 1e-7
-    hist   /= hist.sum()
-
-    # Shannon entropy — lebih tinggi = tekstur lebih kaya
-    entropy = float(-np.sum(hist * np.log2(hist + 1e-10)))
-
-    # High-frequency energy via Laplacian
-    lap     = cv2.Laplacian(resized, cv2.CV_64F)
-    hf_energy = float(lap.var())
-
-    # Normalisasi ke [0,1]
-    # Entropy wajah asli biasanya 6.5–7.5 bit; foto 5.0–6.5 bit
-    entropy_score = float(np.clip((entropy - 5.0) / 3.0, 0, 1))
-    hf_score      = float(np.clip(hf_energy / 500.0, 0, 1))
-
-    combined = 0.6 * entropy_score + 0.4 * hf_score
-
-    return combined, {
-        "lbp_entropy":    round(entropy, 3),
-        "hf_energy":      round(hf_energy, 1),
-        "texture_score":  round(combined, 3),
-    }
-
-
-# ══════════════════════════════════════════════════════════
-# METODE B — OPTICAL FLOW MOTION
-# ══════════════════════════════════════════════════════════
-
-def _motion_score(frames_gray: List[np.ndarray]) -> Tuple[float, dict]:
-    """
-    Hitung skor gerakan alami dari sequence frame.
-    Wajah hidup → micro-movement terdeteksi (std-dev flow > threshold).
-    Foto/layar  → hampir nol gerakan.
-    """
-    if len(frames_gray) < 2:
-        return 0.5, {"motion": "insufficient_frames"}
-
-    magnitudes = []
-    for i in range(len(frames_gray) - 1):
-        f1 = cv2.resize(frames_gray[i],  (48, 48))
-        f2 = cv2.resize(frames_gray[i+1], (48, 48))
-        try:
-            flow = cv2.calcOpticalFlowFarneback(
-                f1, f2, None,
-                pyr_scale=0.5, levels=2, winsize=10,
-                iterations=2, poly_n=5, poly_sigma=1.1,
-                flags=0
-            )
-            mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
-            magnitudes.append(float(mag.mean()))
-        except Exception:
-            pass
-
-    if not magnitudes:
-        return 0.5, {"motion": "flow_error"}
-
-    avg_mag  = float(np.mean(magnitudes))
-    std_mag  = float(np.std(magnitudes))
-
-    # Wajah asli: avg 0.3–2.0, std > 0.1
-    # Foto diam : avg ~0.0, std ~0.0
-    # Layar animasi: avg bisa tinggi tapi pola berbeda
-    avg_score = float(np.clip(avg_mag / 1.5, 0, 1))
-    std_score = float(np.clip(std_mag / 0.5, 0, 1))
-    combined  = 0.5 * avg_score + 0.5 * std_score
-
-    return combined, {
-        "flow_avg":     round(avg_mag, 3),
-        "flow_std":     round(std_mag, 3),
-        "motion_score": round(combined, 3),
-    }
-
-
-# ══════════════════════════════════════════════════════════
-# METODE C — EYE / BLINK DETECTION
+# METODE A — EYE / BLINK DETECTION
 # ══════════════════════════════════════════════════════════
 
 class BlinkDetector:
@@ -195,6 +79,12 @@ class BlinkDetector:
     """
 
     def __init__(self):
+        if cv2 is None:
+            self._cascade = None
+            self._history = []
+            self._blinks = 0
+            return
+
         # Coba kacamata dulu, fallback ke standar
         path = _find_cascade("haarcascade_eye_tree_eyeglasses.xml")
         if not path:
@@ -203,18 +93,36 @@ class BlinkDetector:
         self._history: List[bool] = []    # True = mata terdeteksi
         self._blinks  = 0
 
+    @staticmethod
+    def _preprocess_for_eyes(face_bgr: np.ndarray) -> np.ndarray:
+        """Preprocess area wajah agar deteksi mata lebih stabil di low-light."""
+        if cv2 is None:
+            return np.zeros((1, 1), dtype=np.uint8)
+
+        gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(
+            clipLimit=getattr(config, "BLINK_CLAHE_CLIP_LIMIT", 2.0),
+            tileGridSize=getattr(config, "BLINK_CLAHE_TILE_GRID", (8, 8)),
+        )
+        enhanced = clahe.apply(gray)
+
+        gamma = max(0.1, float(getattr(config, "BLINK_GAMMA", 1.15)))
+        inv_gamma = 1.0 / gamma
+        lut = np.array([((i / 255.0) ** inv_gamma) * 255 for i in range(256)]).astype("uint8")
+        enhanced = cv2.LUT(enhanced, lut)
+
+        return cv2.equalizeHist(enhanced)
+
     def update(self, face_bgr: np.ndarray) -> bool:
         """Update dengan frame baru. Return True jika mata terdeteksi."""
-        if self._cascade is None:
+        if self._cascade is None or cv2 is None:
             return True
-        gray = cv2.cvtColor(face_bgr, cv2.COLOR_BGR2GRAY)
-        # Equalise untuk kondisi pencahayaan berbeda
-        gray = cv2.equalizeHist(gray)
+        gray = self._preprocess_for_eyes(face_bgr)
         eyes = self._cascade.detectMultiScale(
             gray,
-            scaleFactor=1.1,
-            minNeighbors=2,
-            minSize=(12, 12),
+            scaleFactor=float(getattr(config, "BLINK_EYE_SCALE_FACTOR", 1.08)),
+            minNeighbors=int(getattr(config, "BLINK_EYE_MIN_NEIGHBORS", 1)),
+            minSize=tuple(getattr(config, "BLINK_EYE_MIN_SIZE", (10, 10))),
             flags=cv2.CASCADE_SCALE_IMAGE,
         )
         eye_present = len(eyes) > 0
@@ -261,16 +169,19 @@ def _blink_score(face_frames_bgr: List[np.ndarray]) -> Tuple[float, dict]:
     blinks  = detector.blink_count
     # Score: 1 blink = pasti live; 0 blink masih mungkin live (pengamatan pendek)
     # Kurangi score jika mata tidak pernah terdeteksi sama sekali
+    required_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
+
     if eye_frames == 0:
         score = 0.1   # mata tidak pernah kelihatan — mungkin foto/sudut salah
-    elif blinks >= 1:
+    elif blinks >= required_blinks:
         score = 1.0
     else:
         # Belum berkedip tapi mata terlihat — mungkin window pengamatan pendek
-        score = 0.55
+        score = float(getattr(config, "LIVENESS_BLINK_NO_EVENT_SCORE", 0.58))
 
     return score, {
         "blinks":        blinks,
+        "required_blinks": required_blinks,
         "eye_frames":    eye_frames,
         "total_frames":  len(face_frames_bgr),
         "blink_score":   round(score, 3),
@@ -281,21 +192,16 @@ def _blink_score(face_frames_bgr: List[np.ndarray]) -> Tuple[float, dict]:
 # MAIN DETECTOR
 # ══════════════════════════════════════════════════════════
 
-# Threshold skor per metode untuk dianggap LIVE
-TEXTURE_LIVE_THRESH = 0.40
-MOTION_LIVE_THRESH  = 0.15
-BLINK_LIVE_THRESH   = 0.50
+# Threshold skor blink untuk dinyatakan LIVE
+BLINK_LIVE_THRESH = float(getattr(config, "LIVENESS_BLINK_SCORE_THRESH", 0.55))
 
-# Threshold skor gabungan
-COMBINED_LIVE_THRESH = 0.25
-
-# Minimum votes dari 3 metode untuk dinyatakan live
-MIN_VOTES = 2
+# Minimum blink votes (blink-only => default 1)
+MIN_VOTES = int(getattr(config, "LIVENESS_MIN_VOTES", 1))
 
 
 class LivenessDetector:
     """
-    Multi-method liveness detector.
+    Blink-only liveness detector.
 
     Penggunaan dalam mode akses:
         detector = LivenessDetector()
@@ -337,6 +243,9 @@ class LivenessDetector:
         if not self._enabled:
             return LivenessResult(True, 1.0, 1, 1,
                                   {"note": "OpenCV tidak ada, skip liveness"})
+        if cv2 is None:
+            return LivenessResult(True, 1.0, 1, 1,
+                                  {"note": "OpenCV tidak ada, skip liveness"})
         if len(frames) < 3:
             return LivenessResult(True, 0.6, 1, 1,
                                   {"note": "Frame tidak cukup, skip liveness"})
@@ -349,49 +258,31 @@ class LivenessDetector:
                 face_crops.append(crop)
 
         if not face_crops:
-            return LivenessResult(False, 0.0, 0, 3,
+            return LivenessResult(False, 0.0, 0, 1,
                                   {"note": "Wajah tidak bisa di-crop"})
 
         detail = {}
-        scores = []
         votes  = 0
 
-        # ── METODE A: Texture ──────────────────────────────
-        # Gunakan frame tengah (kualitas biasanya paling baik)
-        mid_frame = face_crops[len(face_crops)//2]
-        t_score, t_detail = _texture_score(mid_frame)
-        detail.update(t_detail)
-        scores.append(t_score)
-        if t_score >= TEXTURE_LIVE_THRESH:
-            votes += 1
-
-        # ── METODE B: Motion ───────────────────────────────
-        grays = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in face_crops]
-        m_score, m_detail = _motion_score(grays)
-        detail.update(m_detail)
-        scores.append(m_score)
-        if m_score >= MOTION_LIVE_THRESH:
-            votes += 1
-
-        # ── METODE C: Blink ────────────────────────────────
+        # ── METODE: Blink ───────────────────────────────────
         b_score, b_detail = _blink_score(face_crops)
         detail.update(b_detail)
-        scores.append(b_score)
         if b_score >= BLINK_LIVE_THRESH:
             votes += 1
 
         # ── Keputusan ──────────────────────────────────────
-        combined = float(np.mean(scores))
-        is_live  = (votes >= MIN_VOTES) and (combined >= COMBINED_LIVE_THRESH)
+        combined = b_score
+        min_score = float(getattr(config, "LIVENESS_MIN_SCORE", BLINK_LIVE_THRESH))
+        is_live  = (votes >= MIN_VOTES) and (combined >= min_score)
 
         log.info(f"Liveness: live={is_live} score={combined:.3f} "
-                 f"votes={votes}/3 {detail}")
+                 f"votes={votes}/1 {detail}")
 
         return LivenessResult(
             is_live=is_live,
             score=round(combined, 3),
             votes=votes,
-            total=3,
+            total=1,
             detail=detail,
         )
 
@@ -422,7 +313,7 @@ class LivenessDetector:
             time.sleep(0.1)   # ~10 fps collection
 
         if not frames or face_box is None:
-            return LivenessResult(False, 0.0, 0, 3,
+            return LivenessResult(False, 0.0, 0, 1,
                                   {"note": "Tidak ada wajah terdeteksi selama observasi"})
 
         log.info(f"Liveness: {len(frames)} frame dikumpulkan dalam {duration:.1f}s")
