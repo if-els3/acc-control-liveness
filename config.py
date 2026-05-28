@@ -72,33 +72,34 @@ APP_VERSION = "1.0.0"
 
 # ─── Liveness Detection ───────────────────────────────────
 LIVENESS_ENABLED       = True    # False = skip liveness, RFID+face saja
-DEBUG_EYE_TRACKER      = True    # True = tampilkan window visualisasi tracker mata
-LIVENESS_DURATION      = 5.0     # detik pengambilan frame (diperpanjang agar blink punya waktu cukup)
-LIVENESS_MIN_SCORE     = 0.60    # threshold skor blink final (dinaikkan agar fallback 0.45 tidak lolos)
-LIVENESS_MIN_VOTES     = 1       # blink-only: cukup 1 vote LIVE
+DEBUG_EYE_TRACKER      = True    # True = simpan debug_eye.jpg setiap frame
+LIVENESS_DURATION      = 5.0     # detik pengambilan frame
+LIVENESS_MIN_SCORE     = 0.60    # threshold skor blink final
+LIVENESS_MIN_VOTES     = 1       # cukup 1 vote LIVE
+LIVENESS_FACE_PAD      = 0.25    # padding crop wajah
 
-# Blink-specific tuning (cahaya normal 195-300 lux / kacamata)
-# BUG-FIX: LIVENESS_BLINK_NO_EVENT_SCORE HARUS lebih kecil dari
-#           LIVENESS_BLINK_SCORE_THRESH dan LIVENESS_MIN_SCORE agar
-#           wajah diam (foto / tidak berkedip) tidak lolos verifikasi.
-LIVENESS_BLINK_MIN_COUNT      = 1      # minimal 1 blink event agar dianggap live
-LIVENESS_BLINK_SCORE_THRESH   = 0.60   # threshold score modul blink (sama dengan MIN_SCORE)
-LIVENESS_BLINK_NO_EVENT_SCORE = 0.45   # fallback saat mata terlihat tapi belum berkedip
-                                        # HARUS < LIVENESS_BLINK_SCORE_THRESH agar tidak auto-lulus
-LIVENESS_FACE_PAD             = 0.25   # padding crop wajah agar mata tidak terpotong
-LIVENESS_BLINK_MIN_CLOSED_FRAMES = 2   # min 2 frame mata tertutup agar dihitung blink (noise filter)
-LIVENESS_BLINK_MAX_CLOSED_FRAMES = 10  # batas atas closure (diperlonggar sedikit untuk kedip lambat)
+# ── EAR (Eye Aspect Ratio) — METODE UTAMA ─────────────────
+# Digunakan jika MediaPipe terinstall (pip install mediapipe).
+# EAR normal saat mata terbuka : ~0.25 – 0.35
+# EAR saat berkedip            : < 0.20 (tergantung orang)
+# Turunkan BLINK_EAR_THRESHOLD jika terlalu banyak false-positive.
+# Naikkan jika blink sulit terdeteksi.
+BLINK_EAR_THRESHOLD    = 0.20   # EAR di bawah ini = mata tertutup
+BLINK_EAR_CONSEC_FRAMES = 2     # min frame dengan EAR < threshold agar dihitung blink
 
-# Haar eye detection tuning — dioptimasi untuk cahaya normal (195–300 lux)
-# minNeighbors yang terlalu kecil (1) menyebabkan false-positive di setiap frame
-# sehingga state tidak pernah masuk "closed" dan blink tidak tercatat.
-BLINK_EYE_SCALE_FACTOR  = 1.10   # sedikit lebih besar agar deteksi lebih stabil
-BLINK_EYE_MIN_NEIGHBORS = 3      # naik dari 1 → 3 untuk mengurangi false-positive di cahaya normal
-BLINK_EYE_MIN_SIZE      = (12, 12)  # ukuran minimum sedikit lebih besar agar noise tidak terdeteksi
+# ── Blink count & scoring ─────────────────────────────────
+# PENTING: LIVENESS_BLINK_NO_EVENT_SCORE HARUS < LIVENESS_BLINK_SCORE_THRESH
+# agar wajah diam / foto tidak otomatis lulus.
+LIVENESS_BLINK_MIN_COUNT      = 1     # minimal 1 blink event agar dianggap live
+LIVENESS_BLINK_SCORE_THRESH   = 0.60  # threshold voting blink
+LIVENESS_BLINK_NO_EVENT_SCORE = 0.45  # score fallback jika 0 blink — HARUS < 0.60
+LIVENESS_BLINK_MIN_CLOSED_FRAMES = 2  # (Haar fallback) min frame tertutup
+LIVENESS_BLINK_MAX_CLOSED_FRAMES = 10 # (Haar fallback) max frame tertutup
 
-# Pre-processing — dioptimasi untuk cahaya normal / terang (195–300 lux)
-# CLAHE clipLimit tinggi + gamma > 1 hanya efektif untuk low-light (<100 lux);
-# di cahaya normal malah over-enhance sehingga tepi kelopak mata hilang.
-BLINK_CLAHE_CLIP_LIMIT  = 1.5    # diturunkan dari 3.0 → 1.5 untuk cahaya normal
+# ── Haar fallback (jika MediaPipe tidak ada) ───────────────
+BLINK_EYE_SCALE_FACTOR  = 1.10
+BLINK_EYE_MIN_NEIGHBORS = 3
+BLINK_EYE_MIN_SIZE      = (12, 12)
+BLINK_CLAHE_CLIP_LIMIT  = 1.5
 BLINK_CLAHE_TILE_GRID   = (8, 8)
-BLINK_GAMMA             = 1.0    # gamma netral (diturunkan dari 1.25) — tidak perlu boost di cahaya normal
+BLINK_GAMMA             = 1.0

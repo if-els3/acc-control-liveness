@@ -6,6 +6,7 @@ opencv-python-headless
 cryptography
 torch
 numpy==1.26.4
+mediapipe              # EAR blink detection — lebih akurat dari Haarcascade
 
 # Gunakan runtime TFLite yang sangat ringan (~5 MB) alih-alih TensorFlow (~1 GB)
 tflite-runtime
