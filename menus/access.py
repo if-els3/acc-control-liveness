@@ -27,6 +27,7 @@ try:
     _HTTP_OK = True
 except Exception:
     _HTTP_OK = False
+    urllib = None
 
 SEP  = "─" * 58
 SEP2 = "═" * 58
@@ -37,7 +38,7 @@ def _fail(msg): print(f"\n  {R}✘ {msg}{NC}")
 def _info(msg): print(f"  {Y}→ {msg}{NC}")
 
 def _http_post_state(host, port, **kwargs):
-    if not _HTTP_OK:
+    if not _HTTP_OK or urllib is None:
         return
     try:
         url = f"http://{host}:{port}/api/state"
@@ -61,7 +62,7 @@ def _make_http_callback(host="localhost", port=None):
     return callback
 
 def _rt_overlay(host, port, **kwargs):
-    if not _HTTP_OK:
+    if not _HTTP_OK or urllib is None:
         return
     try:
         url = f"http://{host}:{port}/api/rt-overlay"
@@ -242,7 +243,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 face_box = box[:4]
             liveness_frames.append(frame)
             # Real-time blink tracking
-            crop = frame[box[1]:box[3], box[0]:box[2]]
+            crop = liveness._crop_face(frame, box[:4])
             if crop.size > 0:
                 if blink_detector.update(crop):
                     pass  # eye present
@@ -290,10 +291,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     lv_status = "LIVE" if res.is_live else "SPOOF"
 
     print(f"  Liveness  : score={res.score:.2f} votes={res.votes}/{res.total}"
-          f"  [tex={td.get('texture_score',0):.2f}"
-          f" mot={td.get('motion_score',0):.2f}"
-          f" blk={td.get('blink_score',0):.2f}"
-          f" blinks={blinks}]")
+          f"  [blk={td.get('blink_score',0):.2f} blinks={blinks}]")
 
     # Syarat blink: harus ada kedipan ATAU blink cascade tidak tersedia
     blink_score = td.get('blink_score', 0)

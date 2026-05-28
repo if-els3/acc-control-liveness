@@ -83,6 +83,8 @@ class BlinkDetector:
             self._cascade = None
             self._history = []
             self._blinks = 0
+            self._state = "unknown"
+            self._closed_frames = 0
             return
 
         # Coba kacamata dulu, fallback ke standar
@@ -92,6 +94,8 @@ class BlinkDetector:
         self._cascade = cv2.CascadeClassifier(path) if path else None
         self._history: List[bool] = []    # True = mata terdeteksi
         self._blinks  = 0
+        self._state = "unknown"
+        self._closed_frames = 0
 
     @staticmethod
     def _preprocess_for_eyes(face_bgr: np.ndarray) -> np.ndarray:
@@ -128,17 +132,20 @@ class BlinkDetector:
         eye_present = len(eyes) > 0
         self._history.append(eye_present)
 
-        # Deteksi blink: True → False → True  (1-frame closure)
-        if len(self._history) >= 3:
-            a, b, c = self._history[-3], self._history[-2], self._history[-1]
-            if a and not b and c:
-                self._blinks += 1
+        min_closed = int(getattr(config, "LIVENESS_BLINK_MIN_CLOSED_FRAMES", 1))
+        max_closed = int(getattr(config, "LIVENESS_BLINK_MAX_CLOSED_FRAMES", 8))
 
-        # Juga deteksi: True → False → False → True  (2-frame closure)
-        if len(self._history) >= 4:
-            a, b, c, d = self._history[-4], self._history[-3], self._history[-2], self._history[-1]
-            if a and not b and not c and d:
+        if eye_present:
+            if self._state == "closed" and min_closed <= self._closed_frames <= max_closed:
                 self._blinks += 1
+            self._state = "open"
+            self._closed_frames = 0
+        else:
+            if self._state in ("open", "unknown"):
+                self._state = "closed"
+                self._closed_frames = 1
+            else:
+                self._closed_frames += 1
 
         return eye_present
 
@@ -220,6 +227,7 @@ class LivenessDetector:
                    box: Tuple[int,int,int,int],
                    pad: float = 0.1) -> np.ndarray:
         """Crop area wajah dengan sedikit padding."""
+        pad = float(getattr(config, "LIVENESS_FACE_PAD", pad))
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = box
         pw = int((x2-x1) * pad); ph = int((y2-y1) * pad)

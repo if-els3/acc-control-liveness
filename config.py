@@ -80,11 +80,14 @@ LIVENESS_MIN_VOTES     = 1      # blink-only: cukup 1 vote LIVE
 LIVENESS_BLINK_MIN_COUNT      = 1      # minimal blink event agar dianggap live
 LIVENESS_BLINK_SCORE_THRESH   = 0.50   # threshold score dari modul blink
 LIVENESS_BLINK_NO_EVENT_SCORE = 0.58   # score fallback saat mata terlihat tapi belum berkedip
+LIVENESS_FACE_PAD             = 0.25   # padding crop wajah agar mata tidak terpotong
+LIVENESS_BLINK_MIN_CLOSED_FRAMES = 1   # min frame mata tertutup agar dihitung blink
+LIVENESS_BLINK_MAX_CLOSED_FRAMES = 8   # batas atas closure agar tidak terlalu panjang dianggap blink
 
 # Haar eye detection tuning
 BLINK_EYE_SCALE_FACTOR  = 1.08
 BLINK_EYE_MIN_NEIGHBORS = 1
-BLINK_EYE_MIN_SIZE      = (10, 10)
+BLINK_EYE_MIN_SIZE      = (8, 8)
 
 # Pre-processing untuk low-light
 BLINK_CLAHE_CLIP_LIMIT  = 3.0
