@@ -72,24 +72,32 @@ APP_VERSION = "1.0.0"
 
 # ─── Liveness Detection ───────────────────────────────────
 LIVENESS_ENABLED       = True    # False = skip liveness, RFID+face saja
-LIVENESS_DURATION      = 4.5    # detik pengambilan frame untuk liveness (lebih panjang untuk menangkap blink)
-LIVENESS_MIN_SCORE     = 0.50   # threshold skor blink final
-LIVENESS_MIN_VOTES     = 1      # blink-only: cukup 1 vote LIVE
+LIVENESS_DURATION      = 5.0     # detik pengambilan frame (diperpanjang agar blink punya waktu cukup)
+LIVENESS_MIN_SCORE     = 0.60    # threshold skor blink final (dinaikkan agar fallback 0.45 tidak lolos)
+LIVENESS_MIN_VOTES     = 1       # blink-only: cukup 1 vote LIVE
 
-# Blink-specific tuning (kacamata + low-light)
-LIVENESS_BLINK_MIN_COUNT      = 1      # minimal blink event agar dianggap live
-LIVENESS_BLINK_SCORE_THRESH   = 0.50   # threshold score dari modul blink
-LIVENESS_BLINK_NO_EVENT_SCORE = 0.58   # score fallback saat mata terlihat tapi belum berkedip
+# Blink-specific tuning (cahaya normal 195-300 lux / kacamata)
+# BUG-FIX: LIVENESS_BLINK_NO_EVENT_SCORE HARUS lebih kecil dari
+#           LIVENESS_BLINK_SCORE_THRESH dan LIVENESS_MIN_SCORE agar
+#           wajah diam (foto / tidak berkedip) tidak lolos verifikasi.
+LIVENESS_BLINK_MIN_COUNT      = 1      # minimal 1 blink event agar dianggap live
+LIVENESS_BLINK_SCORE_THRESH   = 0.60   # threshold score modul blink (sama dengan MIN_SCORE)
+LIVENESS_BLINK_NO_EVENT_SCORE = 0.45   # fallback saat mata terlihat tapi belum berkedip
+                                        # HARUS < LIVENESS_BLINK_SCORE_THRESH agar tidak auto-lulus
 LIVENESS_FACE_PAD             = 0.25   # padding crop wajah agar mata tidak terpotong
-LIVENESS_BLINK_MIN_CLOSED_FRAMES = 1   # min frame mata tertutup agar dihitung blink
-LIVENESS_BLINK_MAX_CLOSED_FRAMES = 8   # batas atas closure agar tidak terlalu panjang dianggap blink
+LIVENESS_BLINK_MIN_CLOSED_FRAMES = 2   # min 2 frame mata tertutup agar dihitung blink (noise filter)
+LIVENESS_BLINK_MAX_CLOSED_FRAMES = 10  # batas atas closure (diperlonggar sedikit untuk kedip lambat)
 
-# Haar eye detection tuning
-BLINK_EYE_SCALE_FACTOR  = 1.08
-BLINK_EYE_MIN_NEIGHBORS = 1
-BLINK_EYE_MIN_SIZE      = (8, 8)
+# Haar eye detection tuning — dioptimasi untuk cahaya normal (195–300 lux)
+# minNeighbors yang terlalu kecil (1) menyebabkan false-positive di setiap frame
+# sehingga state tidak pernah masuk "closed" dan blink tidak tercatat.
+BLINK_EYE_SCALE_FACTOR  = 1.10   # sedikit lebih besar agar deteksi lebih stabil
+BLINK_EYE_MIN_NEIGHBORS = 3      # naik dari 1 → 3 untuk mengurangi false-positive di cahaya normal
+BLINK_EYE_MIN_SIZE      = (12, 12)  # ukuran minimum sedikit lebih besar agar noise tidak terdeteksi
 
-# Pre-processing untuk low-light
-BLINK_CLAHE_CLIP_LIMIT  = 3.0
+# Pre-processing — dioptimasi untuk cahaya normal / terang (195–300 lux)
+# CLAHE clipLimit tinggi + gamma > 1 hanya efektif untuk low-light (<100 lux);
+# di cahaya normal malah over-enhance sehingga tepi kelopak mata hilang.
+BLINK_CLAHE_CLIP_LIMIT  = 1.5    # diturunkan dari 3.0 → 1.5 untuk cahaya normal
 BLINK_CLAHE_TILE_GRID   = (8, 8)
-BLINK_GAMMA             = 1.25
+BLINK_GAMMA             = 1.0    # gamma netral (diturunkan dari 1.25) — tidak perlu boost di cahaya normal
