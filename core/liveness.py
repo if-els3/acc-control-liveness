@@ -157,6 +157,13 @@ class BlinkDetector:
             debug_img = cv2.resize(debug_img, (0, 0), fx=3.0, fy=3.0)
             cv2.imwrite(os.path.join(getattr(config, "BASE_DIR", "."), "debug_eye.jpg"), debug_img)
 
+            # SAVE GRAY IMAGE TO SEE PREPROCESSING RESULT
+            debug_gray = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+            for (x, y, w, h) in eyes:
+                cv2.rectangle(debug_gray, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            debug_gray = cv2.resize(debug_gray, (0, 0), fx=3.0, fy=3.0)
+            cv2.imwrite(os.path.join(getattr(config, "BASE_DIR", "."), "debug_eye_gray.jpg"), debug_gray)
+
         return eye_present
 
     @property
