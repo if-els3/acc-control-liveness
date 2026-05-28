@@ -147,6 +147,17 @@ class BlinkDetector:
             else:
                 self._closed_frames += 1
 
+        if getattr(config, "DEBUG_EYE_TRACKER", False):
+            debug_img = face_bgr.copy()
+            for (x, y, w, h) in eyes:
+                cv2.rectangle(debug_img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            cv2.putText(debug_img, f"Blinks: {self._blinks} State: {self._state}", (5, 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+            # Resize agar lebih jelas dilihat
+            debug_img = cv2.resize(debug_img, (0, 0), fx=3.0, fy=3.0)
+            cv2.imshow("Eye Debug Tracker", debug_img)
+            cv2.waitKey(1)
+
         return eye_present
 
     @property

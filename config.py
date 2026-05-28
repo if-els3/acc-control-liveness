@@ -72,6 +72,7 @@ APP_VERSION = "1.0.0"
 
 # ─── Liveness Detection ───────────────────────────────────
 LIVENESS_ENABLED       = True    # False = skip liveness, RFID+face saja
+DEBUG_EYE_TRACKER      = True    # True = tampilkan window visualisasi tracker mata
 LIVENESS_DURATION      = 5.0     # detik pengambilan frame (diperpanjang agar blink punya waktu cukup)
 LIVENESS_MIN_SCORE     = 0.60    # threshold skor blink final (dinaikkan agar fallback 0.45 tidak lolos)
 LIVENESS_MIN_VOTES     = 1       # blink-only: cukup 1 vote LIVE
