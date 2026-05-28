@@ -84,8 +84,8 @@ LIVENESS_FACE_PAD      = 0.25    # padding crop wajah
 # EAR saat berkedip            : < 0.20 (tergantung orang)
 # Turunkan BLINK_EAR_THRESHOLD jika terlalu banyak false-positive.
 # Naikkan jika blink sulit terdeteksi.
-BLINK_EAR_THRESHOLD    = 0.20   # EAR di bawah ini = mata tertutup
-BLINK_EAR_CONSEC_FRAMES = 2     # min frame dengan EAR < threshold agar dihitung blink
+BLINK_EAR_THRESHOLD    = 0.21   # EAR di bawah ini = mata tertutup
+BLINK_EAR_CONSEC_FRAMES = 1     # min frame dengan EAR < threshold agar dihitung blink
 
 # ── Blink count & scoring ─────────────────────────────────
 # PENTING: LIVENESS_BLINK_NO_EVENT_SCORE HARUS < LIVENESS_BLINK_SCORE_THRESH
