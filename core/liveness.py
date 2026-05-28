@@ -155,8 +155,7 @@ class BlinkDetector:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
             # Resize agar lebih jelas dilihat
             debug_img = cv2.resize(debug_img, (0, 0), fx=3.0, fy=3.0)
-            cv2.imshow("Eye Debug Tracker", debug_img)
-            cv2.waitKey(1)
+            cv2.imwrite(os.path.join(getattr(config, "BASE_DIR", "."), "debug_eye.jpg"), debug_img)
 
         return eye_present
 
