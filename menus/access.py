@@ -84,6 +84,21 @@ def _banner(mode=""):
 
 def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=None):
     """Proses satu siklus akses. Return status string."""
+    t_rfid = time.perf_counter()
+    t_face_detect = None
+
+    def _report_timing(waktu2_override=None):
+        waktu1 = time.perf_counter() - t_rfid
+        if waktu2_override is not None:
+            waktu2 = waktu2_override
+        else:
+            waktu2 = (time.perf_counter() - t_face_detect) if t_face_detect is not None else None
+        if waktu2 is not None:
+            print(f"  Waktu      : waktu1={waktu1:.2f}s | waktu2={waktu2:.2f}s")
+        else:
+            print(f"  Waktu      : waktu1={waktu1:.2f}s | waktu2=tidak terukur")
+        return waktu1, waktu2
+
     user = db.get_user_by_rfid(uid_str)
     if user is None:
         _fail(f"DITOLAK — Kartu tidak terdaftar ({uid_str})")
@@ -110,6 +125,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
         db.catat_log(uid_str, "GRANTED", "Tidak ada data wajah — RFID only",
                      user_id=user['id'], nama=nama)
         door.open(duration=config.DOOR_OPEN_SEC)
+        waktu1, waktu2 = _report_timing()
         # Update state for granted access
         if state_callback:
             state_callback(
@@ -117,11 +133,177 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 step_code="granted",
                 user_name=nama,
                 similarity=None,
-                message="Akses diberikan berdasarkan RFID saja"
+                message=(
+                    "Akses diberikan berdasarkan RFID saja. "
+                    f"waktu1={waktu1:.2f}s"
+                    + (f", waktu2={waktu2:.2f}s" if waktu2 is not None else ", waktu2=tidak terukur")
+                )
             )
         return "GRANTED"
 
-    # --- TAHAP 1: VERIFIKASI WAJAH ---
+    # --- TAHAP 1: LIVENESS (BLINK PRIORITIZED) ---
+    live_blinks = 0
+    liveness_frames = []
+    face_box = None
+    lv_status = ""
+    liveness_score = None
+    liveness_votes = None
+    liveness_total = None
+
+    if config.LIVENESS_ENABLED:
+        _info("Silakan BERKEDIP beberapa kali untuk verifikasi liveness...")
+        if state_callback:
+            state_callback(
+                step="Silakan BERKEDIP",
+                step_code="liveness",
+                user_name=nama,
+                similarity=None,
+                blinks=0,
+                liveness_status="",
+                message="Identitas terdeteksi. Sekarang liveness diproses dulu..."
+            )
+        _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                    getattr(config, 'WEB_PORT', 5000),
+                    active=True)
+
+        blink_detector = BlinkDetector()
+        t0 = time.time()
+        # Kumpulkan frame selama durasi liveness + real-time blink tracking
+        while time.time() - t0 < config.LIVENESS_DURATION:
+            frame = cam.read()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            box = face_engine.detect_largest(frame)
+            if box is not None:
+                if face_box is None:
+                    face_box = box[:4]
+                    t_face_detect = time.perf_counter()
+                liveness_frames.append(frame)
+                crop = liveness._crop_face(frame, box[:4])
+                if crop.size > 0:
+                    blink_detector.update(crop)
+                    live_blinks = blink_detector.blink_count
+                    if state_callback:
+                        state_callback(
+                            step="Silakan BERKEDIP",
+                            step_code="liveness",
+                            user_name=nama,
+                            similarity=None,
+                            blinks=live_blinks,
+                            liveness_status="Mengecek...",
+                            message=f"Kedipan terdeteksi: {live_blinks}"
+                        )
+                    _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                                getattr(config, 'WEB_PORT', 5000),
+                                blinks=live_blinks,
+                                liveness_status="Cek..."
+                            )
+            time.sleep(0.08)
+
+        if not liveness_frames or face_box is None:
+            _fail("GAGAL — Wajah hilang saat deteksi liveness")
+            db.catat_log(uid_str, "ERROR", "Wajah hilang saat liveness",
+                         user_id=user['id'], nama=nama)
+            _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                        getattr(config, 'WEB_PORT', 5000),
+                        active=False)
+            if state_callback:
+                state_callback(
+                    step="Wajah Hilang",
+                    step_code="error",
+                    user_name=nama,
+                    similarity=None,
+                    blinks=live_blinks,
+                    liveness_status="",
+                    message="Wajah tidak terdeteksi saat proses liveness"
+                )
+            return "ERROR"
+
+        res = liveness.check(liveness_frames, face_box)
+        td = res.detail
+        lv_status = "LIVE" if res.is_live else "SPOOF"
+        liveness_score = res.score
+        liveness_votes = res.votes
+        liveness_total = res.total
+        blinks = td.get('blinks', live_blinks)
+
+        print(f"  Liveness  : score={res.score:.2f} votes={res.votes}/{res.total}"
+              f"  [blk={td.get('blink_score',0):.2f} blinks={blinks}]")
+
+        waktu2_liveness = (time.perf_counter() - t_face_detect) if t_face_detect is not None else None
+        waktu1, waktu2 = _report_timing(waktu2_liveness)
+
+        blink_score = td.get('blink_score', 0)
+        cascade_ok = td.get('blink') != 'cascade_unavailable'
+
+        if cascade_ok and blinks == 0 and blink_score < 0.5:
+            _fail("DITOLAK — Tidak ada kedipan terdeteksi!")
+            db.catat_log(uid_str, "DENIED_SPOOF", "Gagal: Tidak ada kedipan",
+                         user_id=user['id'], nama=nama)
+            _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                        getattr(config, 'WEB_PORT', 5000),
+                        active=False, liveness_status=lv_status)
+            if state_callback:
+                state_callback(
+                    step="Tidak Ada Kedipan",
+                    step_code="denied",
+                    user_name=nama,
+                    similarity=None,
+                    blinks=blinks,
+                    liveness_status=lv_status,
+                    message="Akses ditolak karena tidak ada kedipan terdeteksi"
+                )
+            return "DENIED_SPOOF"
+
+        if not res.is_live:
+            _fail(f"DITOLAK — Liveness gagal (score={res.score:.2f})")
+            db.catat_log(uid_str, "DENIED_SPOOF", f"Liveness score {res.score:.2f} rendah",
+                         user_id=user['id'], nama=nama)
+            _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                        getattr(config, 'WEB_PORT', 5000),
+                        active=False, liveness_status=lv_status)
+            if state_callback:
+                state_callback(
+                    step="Liveness Gagal",
+                    step_code="denied",
+                    user_name=nama,
+                    similarity=None,
+                    blinks=blinks,
+                    liveness_status=lv_status,
+                    message=f"Liveness terdeteksi sebagai spoof (score={res.score:.2f})"
+                )
+            return "DENIED_SPOOF"
+
+        if state_callback:
+            state_callback(
+                step="Liveness Lolos",
+                step_code="liveness_pass",
+                user_name=nama,
+                similarity=None,
+                blinks=blinks,
+                liveness_status=lv_status,
+                message=(
+                    f"Liveness sukses. waktu2={waktu2:.2f}s, lanjut verifikasi wajah"
+                )
+            )
+        _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                    getattr(config, 'WEB_PORT', 5000),
+                    active=False, liveness_status=lv_status)
+    else:
+        waktu2 = None
+        if state_callback:
+            state_callback(
+                step="Liveness Dinonaktifkan",
+                step_code="liveness_skip",
+                user_name=nama,
+                similarity=None,
+                blinks=0,
+                liveness_status="",
+                message="Liveness dinonaktifkan, lanjut verifikasi wajah"
+            )
+
+    # --- TAHAP 2: VERIFIKASI WAJAH ---
     _info("Memverifikasi identitas ...")
     if state_callback:
         state_callback(
@@ -129,36 +311,44 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             step_code="verify",
             user_name=nama,
             similarity=None,
+            blinks=live_blinks,
+            liveness_status=lv_status,
             message="Mencocokkan wajah dengan database..."
         )
 
-    verify_frames = []
-    t0 = time.time()
-    # Kumpulkan frame untuk verifikasi (target ENROLL_FRAMES atau timeout 3s)
-    target_v = config.ENROLL_FRAMES
-    while len(verify_frames) < target_v and time.time() - t0 < 3.0:
-        frame = cam.read()
-        if frame is None:
-            time.sleep(0.05); continue
-        if face_engine.detect_largest(frame) is not None:
-            verify_frames.append(frame)
-        time.sleep(0.1)
+    if config.LIVENESS_ENABLED:
+        verify_frames = list(liveness_frames)
+    else:
+        verify_frames = []
+        t0 = time.time()
+        target_v = config.ENROLL_FRAMES
+        while len(verify_frames) < target_v and time.time() - t0 < 3.0:
+            frame = cam.read()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            if face_engine.detect_largest(frame) is not None:
+                if t_face_detect is None:
+                    t_face_detect = time.perf_counter()
+                verify_frames.append(frame)
+            time.sleep(0.1)
 
-    if not verify_frames:
-        _fail("GAGAL — Wajah tidak terdeteksi untuk verifikasi")
-        db.catat_log(uid_str, "ERROR", "Wajah tidak terdeteksi saat verifikasi",
-                     user_id=user['id'], nama=nama)
-        if state_callback:
-            state_callback(
-                step="Wajah tidak terdeteksi",
-                step_code="error",
-                user_name=nama,
-                similarity=None,
-                message="Gagal mendeteksi wajah untuk verifikasi identitas"
-            )
-        return "ERROR"
+        if not verify_frames:
+            _fail("GAGAL — Wajah tidak terdeteksi untuk verifikasi")
+            db.catat_log(uid_str, "ERROR", "Wajah tidak terdeteksi saat verifikasi",
+                         user_id=user['id'], nama=nama)
+            if state_callback:
+                state_callback(
+                    step="Wajah tidak terdeteksi",
+                    step_code="error",
+                    user_name=nama,
+                    similarity=None,
+                    blinks=live_blinks,
+                    liveness_status=lv_status,
+                    message="Gagal mendeteksi wajah untuk verifikasi identitas"
+                )
+            return "ERROR"
 
-    # Callback for real-time similarity update
     def _sim_callback(sc):
         if state_callback:
             state_callback(
@@ -166,11 +356,10 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 step_code="verify",
                 user_name=nama,
                 similarity=sc,
-                blinks=None,
-                liveness_status=None,
+                blinks=live_blinks,
+                liveness_status=lv_status,
                 message=f"Similarity: {sc*100:.1f}% (threshold: {config.FACE_MATCH_THRESH*100:.0f}%)"
             )
-        # Real-time similarity on face box
         _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                     getattr(config, 'WEB_PORT', 5000),
                     similarity=sc, active=True)
@@ -178,7 +367,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     match, score = face_engine.verify_multi_frame(verify_frames, stored_embs, min_votes=2, callback=_sim_callback)
     pct = score * 100
     thr = config.FACE_MATCH_THRESH * 100
-    
+
     if not match:
         _fail(f"AKSES DITOLAK — Wajah tidak cocok ({pct:.1f}% < {thr:.0f}%)")
         db.catat_log(uid_str, "DENIED_FACE", f"Face {pct:.1f}% < {thr:.0f}%",
@@ -189,160 +378,23 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 step_code="denied",
                 user_name=nama,
                 similarity=score,
+                blinks=live_blinks,
+                liveness_status=lv_status,
                 message=f"Identitas tidak terverifikasi (Similarity {pct:.1f}%)"
             )
         return "DENIED_FACE"
 
     _ok(f"Identitas Terverifikasi ({pct:.1f}%)")
 
-    # --- TAHAP 2: LIVENESS (BLINK PRIORITIZED) ---
-    if not config.LIVENESS_ENABLED:
-        _ok(f"AKSES DITERIMA — {nama} (Liveness disabled)")
-        db.catat_log(uid_str, "GRANTED", f"Face {pct:.1f}%, Liveness skip",
-                     user_id=user['id'], nama=nama)
-        door.open(duration=config.DOOR_OPEN_SEC)
-        if state_callback:
-            state_callback(
-                step="Akses Diberikan",
-                step_code="granted",
-                user_name=nama,
-                similarity=score,
-                message="Identitas terverifikasi, liveness dinonaktifkan"
-            )
-        return "GRANTED"
-
-    _info("Silakan BERKEDIP beberapa kali untuk verifikasi liveness...")
-    if state_callback:
-        state_callback(
-            step="Silakan BERKEDIP",
-            step_code="liveness",
-            user_name=nama,
-            similarity=score,
-            blinks=0,
-            liveness_status="",
-            message="Identitas OK. Sekarang silakan berkedip ke arah kamera..."
-        )
-    # Activate rt-overlay for face box
-    _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
-                getattr(config, 'WEB_PORT', 5000),
-                active=True)
-
-    liveness_frames = []
-    face_box = None
-    blink_detector = BlinkDetector()
-    live_blinks = 0
-    t0 = time.time()
-    # Kumpulkan frame selama durasi liveness + real-time blink tracking
-    while time.time() - t0 < config.LIVENESS_DURATION:
-        frame = cam.read()
-        if frame is None:
-            time.sleep(0.05); continue
-        box = face_engine.detect_largest(frame)
-        if box is not None:
-            if face_box is None:
-                face_box = box[:4]
-            liveness_frames.append(frame)
-            # Real-time blink tracking
-            crop = liveness._crop_face(frame, box[:4])
-            if crop.size > 0:
-                if blink_detector.update(crop):
-                    pass  # eye present
-                live_blinks = blink_detector.blink_count
-                # Update state + rt-overlay in real-time
-                if state_callback:
-                    state_callback(
-                        step="Silakan BERKEDIP",
-                        step_code="liveness",
-                        user_name=nama,
-                        similarity=score,
-                        blinks=live_blinks,
-                        liveness_status="Mengecek...",
-                        message=f"Kedipan terdeteksi: {live_blinks}"
-                    )
-                _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
-                            getattr(config, 'WEB_PORT', 5000),
-                            blinks=live_blinks,
-                            liveness_status="Cek..."
-                        )
-        time.sleep(0.08)
-
-    if not liveness_frames or face_box is None:
-        _fail("GAGAL — Wajah hilang saat deteksi liveness")
-        db.catat_log(uid_str, "ERROR", "Wajah hilang saat liveness",
-                     user_id=user['id'], nama=nama)
-        _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
-                    getattr(config, 'WEB_PORT', 5000),
-                    active=False)
-        if state_callback:
-            state_callback(
-                step="Wajah Hilang",
-                step_code="error",
-                user_name=nama,
-                similarity=score,
-                blinks=live_blinks,
-                liveness_status="",
-                message="Wajah tidak terdeteksi saat proses liveness"
-            )
-        return "ERROR"
-
-    res = liveness.check(liveness_frames, face_box)
-    td = res.detail
-    blinks = td.get('blinks', live_blinks)
-    lv_status = "LIVE" if res.is_live else "SPOOF"
-
-    print(f"  Liveness  : score={res.score:.2f} votes={res.votes}/{res.total}"
-          f"  [blk={td.get('blink_score',0):.2f} blinks={blinks}]")
-
-    # Syarat blink: harus ada kedipan ATAU blink cascade tidak tersedia
-    blink_score = td.get('blink_score', 0)
-    cascade_ok = td.get('blink') != 'cascade_unavailable'
-
-    if cascade_ok and blinks == 0 and blink_score < 0.5:
-        _fail("DITOLAK — Tidak ada kedipan terdeteksi!")
-        db.catat_log(uid_str, "DENIED_SPOOF", "Gagal: Tidak ada kedipan",
-                     user_id=user['id'], nama=nama)
-        _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
-                    getattr(config, 'WEB_PORT', 5000),
-                    active=False, liveness_status=lv_status)
-        if state_callback:
-            state_callback(
-                step="Tidak Ada Kedipan",
-                step_code="denied",
-                user_name=nama,
-                similarity=score,
-                blinks=blinks,
-                liveness_status=lv_status,
-                message="Akses ditolak karena tidak ada kedipan terdeteksi"
-            )
-        return "DENIED_SPOOF"
-
-    if not res.is_live:
-        _fail(f"DITOLAK — Liveness gagal (score={res.score:.2f})")
-        db.catat_log(uid_str, "DENIED_SPOOF", f"Liveness score {res.score:.2f} rendah",
-                     user_id=user['id'], nama=nama)
-        _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
-                    getattr(config, 'WEB_PORT', 5000),
-                    active=False, liveness_status=lv_status)
-        if state_callback:
-            state_callback(
-                step="Liveness Gagal",
-                step_code="denied",
-                user_name=nama,
-                similarity=score,
-                blinks=blinks,
-                liveness_status=lv_status,
-                message=f"Liveness terdeteksi sebagai spoof (score={res.score:.2f})"
-            )
-        return "DENIED_SPOOF"
-
-    # Lulus semua tahap
     _ok(f"AKSES DITERIMA — {nama} ({pct:.1f}%)")
-    db.catat_log(uid_str, "GRANTED", f"Face {pct:.1f}%, Liveness OK ({blinks} blink)",
+    db.catat_log(uid_str, "GRANTED", f"Face {pct:.1f}%, Liveness OK ({live_blinks} blink)",
                  user_id=user['id'], nama=nama)
     door.open(duration=config.DOOR_OPEN_SEC)
     _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                 getattr(config, 'WEB_PORT', 5000),
                 active=False, liveness_status=lv_status)
+
+    waktu1, _ = _report_timing(waktu2)
 
     if state_callback:
         state_callback(
@@ -350,9 +402,13 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             step_code="granted",
             user_name=nama,
             similarity=score,
-            blinks=blinks,
+            blinks=live_blinks,
             liveness_status=lv_status,
-            message=f"Verifikasi sukses! {blinks} kedipan terdeteksi."
+            message=(
+                f"Verifikasi sukses! {live_blinks} kedipan terdeteksi. "
+                f"waktu1={waktu1:.2f}s"
+                + (f", waktu2={waktu2:.2f}s" if waktu2 is not None else ", waktu2=tidak terukur")
+            )
         )
     return "GRANTED"
 
@@ -372,9 +428,11 @@ def mode_akses_normal(db, face_engine, door, single_attempt=False, state_callbac
         while True:
             _banner("Menunggu kartu RFID ...")
             print(f"\n  Tempelkan kartu RFID ...\n")
+            t_scan = time.perf_counter()
             uid, _ = rfid.scan(timeout=60)
             if uid is None:
                 continue
+            print(f"  Tap RFID   : {time.perf_counter() - t_scan:.2f}s")
             status = _proses_akses(str(uid), db, face_engine, liveness, door, cam, state_callback)
             if "DENIED" in status or status == "ERROR":
                 print(f"\n  {Y}Coba lagi dalam 3 detik ...{NC}")
