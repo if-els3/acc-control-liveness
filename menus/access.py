@@ -166,7 +166,14 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                     getattr(config, 'WEB_PORT', 5000),
                     active=True)
 
-        blink_detector = BlinkDetector()
+        # Gunakan BlinkDetector pre-warmed dari LivenessDetector (tidak perlu init ulang)
+        blink_detector = liveness.create_blink_detector()
+        blink_detector.reset()
+
+        required_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
+        early_exit_delay = float(getattr(config, "LIVENESS_EARLY_EXIT_DELAY", 1.0))
+        _blink_achieved_at = None  # timestamp saat blink terpenuhi
+
         t0 = time.time()
         # Kumpulkan frame selama durasi liveness + real-time blink tracking
         while time.time() - t0 < config.LIVENESS_DURATION:
@@ -199,6 +206,14 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                                 blinks=live_blinks,
                                 liveness_status="Cek..."
                             )
+                    # Early-exit: jika blink terpenuhi, tunggu sebentar lalu keluar
+                    if live_blinks >= required_blinks:
+                        if _blink_achieved_at is None:
+                            _blink_achieved_at = time.time()
+                            log.debug(f"Blink terpenuhi ({live_blinks}), tunggu {early_exit_delay}s")
+                        elif time.time() - _blink_achieved_at >= early_exit_delay:
+                            log.debug("Early-exit liveness setelah blink terdeteksi")
+                            break
             time.sleep(0.08)
 
         if not liveness_frames or face_box is None:
@@ -220,7 +235,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 )
             return "ERROR"
 
-        res = liveness.check(liveness_frames, face_box)
+        res = liveness.check(liveness_frames, face_box, blink_detector=blink_detector)
         td = res.detail
         lv_status = "LIVE" if res.is_live else "SPOOF"
         liveness_score = res.score
@@ -317,7 +332,13 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
         )
 
     if config.LIVENESS_ENABLED:
-        verify_frames = list(liveness_frames)
+        # Batasi jumlah frame untuk verifikasi wajah (sampling merata)
+        max_vf = int(getattr(config, "LIVENESS_MAX_VERIFY_FRAMES", 10))
+        if len(liveness_frames) > max_vf:
+            step = max(1, len(liveness_frames) // max_vf)
+            verify_frames = liveness_frames[::step][:max_vf]
+        else:
+            verify_frames = list(liveness_frames)
     else:
         verify_frames = []
         t0 = time.time()

@@ -24,6 +24,11 @@ Penggunaan:
     frames = [frame1, frame2, ... , frame_n]
     result = liveness.check(frames, face_box=(x1,y1,x2,y2))
     # result: LivenessResult(is_live, score, detail)
+
+OPTIMASI:
+    - FaceMesh di-pre-warm sekali di LivenessDetector.__init__()
+    - BlinkDetector bisa menerima face_mesh pre-warmed
+    - static_image_mode=False (tracking mode, 3-5x lebih cepat)
 =============================================================
 """
 import os
@@ -141,9 +146,17 @@ class BlinkDetector:
       - Saat EAR naik lagi (mata terbuka) → catat 1 blink
 
     Fallback ke Haarcascade jika MediaPipe tidak tersedia.
+
+    OPTIMASI: Menerima face_mesh pre-warmed dari LivenessDetector agar tidak
+    perlu inisialisasi ulang setiap sesi akses.
     """
 
-    def __init__(self):
+    def __init__(self, face_mesh=None):
+        """
+        Args:
+            face_mesh: instance MediaPipe FaceMesh yang sudah diinisialisasi
+                       (pre-warmed). Jika None, akan dibuat baru.
+        """
         self._blinks        = 0
         self._ear_history: List[float] = []
         self._state         = "unknown"   # "open" | "closed" | "unknown"
@@ -155,21 +168,30 @@ class BlinkDetector:
 
         # ── Inisialisasi backend ─────────────────────────
         self._mode = "none"  # "mediapipe" | "haar" | "none"
+        self._owns_face_mesh = False  # apakah kita yang membuat face_mesh
 
         if MP_OK and mp_face_mesh is not None:
-            try:
-                self._face_mesh = mp_face_mesh.FaceMesh(
-                    static_image_mode=True,         # tiap frame independen
-                    max_num_faces=1,
-                    refine_landmarks=False,
-                    min_detection_confidence=0.5,
-                    min_tracking_confidence=0.5,
-                )
+            if face_mesh is not None:
+                # Gunakan instance pre-warmed dari LivenessDetector
+                self._face_mesh = face_mesh
                 self._mode = "mediapipe"
-                log.debug("BlinkDetector: MediaPipe Face Mesh aktif")
-            except Exception as e:
-                log.warning(f"BlinkDetector: gagal init MediaPipe ({e}), fallback Haar")
-                self._face_mesh = None
+                log.debug("BlinkDetector: menggunakan FaceMesh pre-warmed")
+            else:
+                # Buat baru jika tidak ada pre-warmed (fallback)
+                try:
+                    self._face_mesh = mp_face_mesh.FaceMesh(
+                        static_image_mode=False,        # tracking mode — jauh lebih cepat
+                        max_num_faces=1,
+                        refine_landmarks=False,
+                        min_detection_confidence=0.5,
+                        min_tracking_confidence=0.4,
+                    )
+                    self._mode = "mediapipe"
+                    self._owns_face_mesh = True
+                    log.debug("BlinkDetector: MediaPipe Face Mesh baru (tracking mode)")
+                except Exception as e:
+                    log.warning(f"BlinkDetector: gagal init MediaPipe ({e}), fallback Haar")
+                    self._face_mesh = None
 
         if self._mode != "mediapipe" and CV2_OK and cv2 is not None:
             path = _find_cascade("haarcascade_eye_tree_eyeglasses.xml")
@@ -314,6 +336,7 @@ class BlinkDetector:
         return list(self._ear_history)
 
     def reset(self):
+        """Reset state untuk sesi akses baru (tanpa re-init FaceMesh)."""
         self._blinks = 0
         self._ear_history.clear()
         self._state = "unknown"
@@ -324,12 +347,18 @@ class BlinkDetector:
 # BLINK SCORE
 # ══════════════════════════════════════════════════════════
 
-def _blink_score(face_frames_bgr: List[np.ndarray]) -> Tuple[float, dict]:
+def _blink_score(face_frames_bgr: List[np.ndarray],
+                 detector: Optional['BlinkDetector'] = None) -> Tuple[float, dict]:
     """
     Hitung skor kedipan dari sequence frame wajah (crop).
     ≥ 1 blink terdeteksi dalam window pengamatan = LIVE.
+
+    Args:
+        face_frames_bgr: list frame wajah (crop)
+        detector: BlinkDetector instance (opsional, jika sudah di-warm)
     """
-    detector = BlinkDetector()
+    if detector is None:
+        detector = BlinkDetector()
 
     if detector.mode == "none":
         return 0.5, {"blink": "no_backend_available"}
@@ -381,17 +410,45 @@ class LivenessDetector:
     """
     Blink-only liveness detector.
 
+    OPTIMASI: FaceMesh di-pre-warm sekali saat __init__(), BlinkDetector
+    dibuat dan di-reuse antar sesi (reset() dipanggil tiap sesi baru).
+
     Penggunaan dalam mode akses:
-        detector = LivenessDetector()
-        frames = [frame1, ..., frame_n]   # ≥ 10 frame (~2 detik di 5fps)
-        face_box = (x1, y1, x2, y2)
-        result = detector.check(frames, face_box)
-        if result.is_live:
-            # lanjutkan ke face recognition
+        detector = LivenessDetector()   # pre-warm sekali di awal
+        # Per sesi:
+        blink_det = detector.create_blink_detector()  # gunakan FaceMesh pre-warmed
+        blink_det.reset()
+        # ... proses frame ...
+        result = detector.check(frames, face_box, blink_detector=blink_det)
     """
 
     def __init__(self):
         self._enabled = CV2_OK
+        self._face_mesh = None   # pre-warmed FaceMesh
+
+        # Pre-warm MediaPipe FaceMesh satu kali
+        if MP_OK and mp_face_mesh is not None and CV2_OK:
+            try:
+                log.info("LivenessDetector: pre-warming FaceMesh...")
+                self._face_mesh = mp_face_mesh.FaceMesh(
+                    static_image_mode=False,        # tracking mode — lebih cepat
+                    max_num_faces=1,
+                    refine_landmarks=False,
+                    min_detection_confidence=0.5,
+                    min_tracking_confidence=0.4,
+                )
+                log.info("LivenessDetector: FaceMesh pre-warmed OK")
+            except Exception as e:
+                log.warning(f"LivenessDetector: gagal pre-warm FaceMesh ({e})")
+                self._face_mesh = None
+
+    def create_blink_detector(self) -> BlinkDetector:
+        """
+        Buat BlinkDetector yang menggunakan FaceMesh pre-warmed.
+        Panggil reset() sebelum setiap sesi akses baru.
+        """
+        detector = BlinkDetector(face_mesh=self._face_mesh)
+        return detector
 
     @staticmethod
     def _crop_face(frame: np.ndarray,
@@ -408,13 +465,16 @@ class LivenessDetector:
 
     def check(self,
               frames: List[np.ndarray],
-              face_box: Tuple[int,int,int,int]) -> LivenessResult:
+              face_box: Tuple[int,int,int,int],
+              blink_detector: Optional[BlinkDetector] = None) -> LivenessResult:
         """
         Periksa liveness dari sequence frame.
 
         Args:
-            frames:   list frame BGR (minimal 5, ideal 10–20)
-            face_box: (x1, y1, x2, y2) area wajah di frame
+            frames:         list frame BGR (minimal 5, ideal 10–20)
+            face_box:       (x1, y1, x2, y2) area wajah di frame
+            blink_detector: BlinkDetector pre-warmed (opsional).
+                            Jika None, dibuat baru (tanpa pre-warm).
 
         Returns:
             LivenessResult
@@ -444,7 +504,8 @@ class LivenessDetector:
         votes  = 0
 
         # ── METODE: Blink (EAR / Haar) ──────────────────
-        b_score, b_detail = _blink_score(face_crops)
+        # Gunakan detector pre-warmed jika tersedia
+        b_score, b_detail = _blink_score(face_crops, detector=blink_detector)
         detail.update(b_detail)
         if b_score >= BLINK_LIVE_THRESH:
             votes += 1

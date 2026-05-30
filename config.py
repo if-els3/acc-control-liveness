@@ -72,11 +72,13 @@ APP_VERSION = "1.0.0"
 
 # ─── Liveness Detection ───────────────────────────────────
 LIVENESS_ENABLED       = True    # False = skip liveness, RFID+face saja
-DEBUG_EYE_TRACKER      = True    # True = simpan debug_eye.jpg setiap frame
-LIVENESS_DURATION      = 5.0     # detik pengambilan frame
+DEBUG_EYE_TRACKER      = False   # False = production (tidak simpan debug_eye.jpg)
+LIVENESS_DURATION      = 4.0     # detik maks pengambilan frame (dikurangi dari 5.0)
 LIVENESS_MIN_SCORE     = 0.60    # threshold skor blink final
 LIVENESS_MIN_VOTES     = 1       # cukup 1 vote LIVE
 LIVENESS_FACE_PAD      = 0.25    # padding crop wajah
+LIVENESS_EARLY_EXIT_DELAY = 1.0  # detik tambahan setelah blink terdeteksi lalu keluar
+LIVENESS_MAX_VERIFY_FRAMES = 10  # maks frame yg diproses untuk verifikasi wajah
 
 # ── EAR (Eye Aspect Ratio) — METODE UTAMA ─────────────────
 # Digunakan jika MediaPipe terinstall (pip install mediapipe).
