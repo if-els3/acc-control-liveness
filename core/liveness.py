@@ -161,10 +161,13 @@ class BlinkDetector:
         self._ear_history: List[float] = []
         self._state         = "unknown"   # "open" | "closed" | "unknown"
         self._closed_frames = 0
+        self._open_frames   = 0
 
         # Baca parameter dari config
         self._ear_thresh    = float(getattr(config, "BLINK_EAR_THRESHOLD", 0.20))
         self._consec_frames = int(getattr(config, "BLINK_EAR_CONSEC_FRAMES", 2))
+        self._min_closed_frames = int(getattr(config, "LIVENESS_BLINK_MIN_CLOSED_FRAMES", self._consec_frames))
+        self._max_closed_frames = int(getattr(config, "LIVENESS_BLINK_MAX_CLOSED_FRAMES", 10))
 
         # ── Inisialisasi backend ─────────────────────────
         self._mode = "none"  # "mediapipe" | "haar" | "none"
@@ -271,13 +274,15 @@ class BlinkDetector:
                     self._closed_frames = 1
                 else:
                     self._closed_frames += 1
+                self._open_frames = 0
             else:
-                if self._state == "closed" and self._closed_frames >= self._consec_frames:
+                if self._state == "closed" and self._min_closed_frames <= self._closed_frames <= self._max_closed_frames:
                     self._blinks += 1
                     log.debug(f"Blink #{self._blinks} (EAR={ear:.3f}, "
                               f"closed_frames={self._closed_frames})")
                 self._state = "open"
                 self._closed_frames = 0
+                self._open_frames += 1
 
             # ── Debug: simpan frame jika diminta ────────
             if getattr(config, "DEBUG_EYE_TRACKER", False) and cv2 is not None:
@@ -348,7 +353,8 @@ class BlinkDetector:
 # ══════════════════════════════════════════════════════════
 
 def _blink_score(face_frames_bgr: List[np.ndarray],
-                 detector: Optional['BlinkDetector'] = None) -> Tuple[float, dict]:
+                 detector: Optional['BlinkDetector'] = None,
+                 required_blinks: Optional[int] = None) -> Tuple[float, dict]:
     """
     Hitung skor kedipan dari sequence frame wajah (crop).
     ≥ 1 blink terdeteksi dalam window pengamatan = LIVE.
@@ -370,7 +376,8 @@ def _blink_score(face_frames_bgr: List[np.ndarray],
             valid_frames += 1
 
     blinks          = detector.blink_count
-    required_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
+    if required_blinks is None:
+        required_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
     ear_vals        = detector.ear_history
     avg_ear         = float(np.mean(ear_vals)) if ear_vals else -1.0
 
@@ -466,7 +473,8 @@ class LivenessDetector:
     def check(self,
               frames: List[np.ndarray],
               face_box: Tuple[int,int,int,int],
-              blink_detector: Optional[BlinkDetector] = None) -> LivenessResult:
+              blink_detector: Optional[BlinkDetector] = None,
+              required_blinks: Optional[int] = None) -> LivenessResult:
         """
         Periksa liveness dari sequence frame.
 
@@ -475,6 +483,7 @@ class LivenessDetector:
             face_box:       (x1, y1, x2, y2) area wajah di frame
             blink_detector: BlinkDetector pre-warmed (opsional).
                             Jika None, dibuat baru (tanpa pre-warm).
+            required_blinks: jumlah blink minimum untuk sesi ini.
 
         Returns:
             LivenessResult
@@ -502,10 +511,12 @@ class LivenessDetector:
 
         detail = {}
         votes  = 0
+        if required_blinks is None:
+            required_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
 
         # ── METODE: Blink (EAR / Haar) ──────────────────
         # Gunakan detector pre-warmed jika tersedia
-        b_score, b_detail = _blink_score(face_crops, detector=blink_detector)
+        b_score, b_detail = _blink_score(face_crops, detector=blink_detector, required_blinks=required_blinks)
         detail.update(b_detail)
         if b_score >= BLINK_LIVE_THRESH:
             votes += 1

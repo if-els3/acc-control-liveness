@@ -11,7 +11,7 @@ Alur akses lengkap:
   6. GRANTED → buka pintu → log
 =============================================================
 """
-import time, os, sys, logging, json
+import time, os, sys, logging, json, random
 log = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
@@ -151,16 +151,22 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     liveness_total = None
 
     if config.LIVENESS_ENABLED:
-        _info("Silakan BERKEDIP beberapa kali untuk verifikasi liveness...")
+        min_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
+        max_blinks = int(getattr(config, "LIVENESS_BLINK_MAX_COUNT", min_blinks))
+        if max_blinks < min_blinks:
+            max_blinks = min_blinks
+        required_blinks = random.randint(min_blinks, max_blinks)
+
+        _info(f"Silakan BERKEDIP {required_blinks} kali untuk verifikasi liveness...")
         if state_callback:
             state_callback(
-                step="Silakan BERKEDIP",
+                step=f"Silakan BERKEDIP {required_blinks}x",
                 step_code="liveness",
                 user_name=nama,
                 similarity=None,
                 blinks=0,
                 liveness_status="",
-                message="Identitas terdeteksi. Sekarang liveness diproses dulu..."
+                message=f"Identitas terdeteksi. Sekarang liveness diproses dulu... Target blink: {required_blinks} kali."
             )
         _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                     getattr(config, 'WEB_PORT', 5000),
@@ -170,7 +176,6 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
         blink_detector = liveness.create_blink_detector()
         blink_detector.reset()
 
-        required_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
         early_exit_delay = float(getattr(config, "LIVENESS_EARLY_EXIT_DELAY", 1.0))
         _blink_achieved_at = None  # timestamp saat blink terpenuhi
 
@@ -193,7 +198,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                     live_blinks = blink_detector.blink_count
                     if state_callback:
                         state_callback(
-                            step="Silakan BERKEDIP",
+                            step=f"Silakan BERKEDIP {required_blinks}x",
                             step_code="liveness",
                             user_name=nama,
                             similarity=None,
@@ -210,7 +215,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                     if live_blinks >= required_blinks:
                         if _blink_achieved_at is None:
                             _blink_achieved_at = time.time()
-                            log.debug(f"Blink terpenuhi ({live_blinks}), tunggu {early_exit_delay}s")
+                            log.debug(f"Blink terpenuhi ({live_blinks}/{required_blinks}), tunggu {early_exit_delay}s")
                         elif time.time() - _blink_achieved_at >= early_exit_delay:
                             log.debug("Early-exit liveness setelah blink terdeteksi")
                             break
@@ -235,7 +240,12 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 )
             return "ERROR"
 
-        res = liveness.check(liveness_frames, face_box, blink_detector=blink_detector)
+        res = liveness.check(
+            liveness_frames,
+            face_box,
+            blink_detector=blink_detector,
+            required_blinks=required_blinks,
+        )
         td = res.detail
         lv_status = "LIVE" if res.is_live else "SPOOF"
         liveness_score = res.score
@@ -244,7 +254,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
         blinks = td.get('blinks', live_blinks)
 
         print(f"  Liveness  : score={res.score:.2f} votes={res.votes}/{res.total}"
-              f"  [blk={td.get('blink_score',0):.2f} blinks={blinks}]")
+              f"  [blk={td.get('blink_score',0):.2f} blinks={blinks}/{required_blinks}]")
 
         waktu2_liveness = (time.perf_counter() - t_face_detect) if t_face_detect is not None else None
         waktu1, waktu2 = _report_timing(waktu2_liveness)

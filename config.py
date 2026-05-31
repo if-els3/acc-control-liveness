@@ -87,12 +87,13 @@ LIVENESS_MAX_VERIFY_FRAMES = 10  # maks frame yg diproses untuk verifikasi wajah
 # Turunkan BLINK_EAR_THRESHOLD jika terlalu banyak false-positive.
 # Naikkan jika blink sulit terdeteksi.
 BLINK_EAR_THRESHOLD    = 0.21   # EAR di bawah ini = mata tertutup
-BLINK_EAR_CONSEC_FRAMES = 1     # min frame dengan EAR < threshold agar dihitung blink
+BLINK_EAR_CONSEC_FRAMES = 2     # min frame dengan EAR < threshold agar dihitung blink
 
 # ── Blink count & scoring ─────────────────────────────────
 # PENTING: LIVENESS_BLINK_NO_EVENT_SCORE HARUS < LIVENESS_BLINK_SCORE_THRESH
 # agar wajah diam / foto tidak otomatis lulus.
-LIVENESS_BLINK_MIN_COUNT      = 1     # minimal 1 blink event agar dianggap live
+LIVENESS_BLINK_MIN_COUNT      = 1     # minimal blink event untuk challenge sesi
+LIVENESS_BLINK_MAX_COUNT      = 2     # challenge blink sesi dipilih acak dalam rentang ini
 LIVENESS_BLINK_SCORE_THRESH   = 0.60  # threshold voting blink
 LIVENESS_BLINK_NO_EVENT_SCORE = 0.45  # score fallback jika 0 blink — HARUS < 0.60
 LIVENESS_BLINK_MIN_CLOSED_FRAMES = 2  # (Haar fallback) min frame tertutup
