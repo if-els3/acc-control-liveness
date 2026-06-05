@@ -87,21 +87,7 @@ def aes_gcm_encrypt(plaintext: bytes, *, aad: bytes = _AAD) -> bytes:
 
 
 def aes_gcm_decrypt(blob: bytes, *, aad: bytes = _AAD) -> bytes:
-    """
-    Dekripsi blob AES-128-GCM (NIST SP 800-38D).
 
-    Parameters
-    ----------
-    blob : bytes  –  [ IV (12) | ciphertext | tag (16) ]
-
-    Returns
-    -------
-    plaintext : bytes
-
-    Raises
-    ------
-    ValueError  : jika blob terlalu pendek atau autentikasi gagal
-    """
     if len(blob) < _IV_LEN + _TAG_LEN:
         raise ValueError("Blob AES-GCM terlalu pendek")
     iv         = blob[:_IV_LEN]

@@ -13,6 +13,7 @@ Sub-menu:
 import os
 import sys
 import logging
+import getpass
 from datetime import datetime
 
 log = logging.getLogger(__name__)
@@ -38,6 +39,18 @@ def _header(title: str):
     print(f"\n{SEP2}")
     print(f"  {title}")
     print(SEP2)
+
+
+def login_admin() -> bool:
+    _header("LOGIN ADMIN")
+    username = input("  Username: ").strip()
+    password = getpass.getpass("  Password: ").strip()
+    
+    if username == "admin" and password == "admin123":
+        print("  \033[92m✔ Login berhasil.\033[0m")
+        return True
+    print("  \033[91m[!] Login gagal. Username atau password salah.\033[0m")
+    return False
 
 
 # ── KELOLA PENGGUNA ───────────────────────────────────────

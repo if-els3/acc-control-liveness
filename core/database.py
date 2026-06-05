@@ -177,16 +177,26 @@ class Database:
     # ── USERS ────────────────────────────────────────────────
 
     def tambah_user(self, nama: str, rfid_uid: str,
-                    embeddings: Optional[List[np.ndarray]] = None) -> int:
+                    embeddings: Optional[List[np.ndarray]] = None,
+                    user_id: Optional[int] = None) -> int:
         now = datetime.now().isoformat()
         emb_blob = encrypt_embedding_list(embeddings) if embeddings else None
         with self._conn() as conn:
-            cur = conn.execute(
-                "INSERT INTO users (nama, rfid_uid, face_embeddings, dibuat, diubah) "
-                "VALUES (?,?,?,?,?)",
-                (nama, str(rfid_uid), emb_blob, now, now)
-            )
+            if user_id is not None:
+                cur = conn.execute(
+                    "INSERT INTO users (id, nama, rfid_uid, face_embeddings, dibuat, diubah) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (user_id, nama, str(rfid_uid), emb_blob, now, now)
+                )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO users (nama, rfid_uid, face_embeddings, dibuat, diubah) "
+                    "VALUES (?,?,?,?,?)",
+                    (nama, str(rfid_uid), emb_blob, now, now)
+                )
         log.info(f"User ditambah: {nama} (UID={rfid_uid})")
+        if user_id is not None:
+            return user_id
         lastid = cur.lastrowid
         if lastid is None:
             raise RuntimeError("Failed to insert user, no lastrowid returned")
