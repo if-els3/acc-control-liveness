@@ -1,16 +1,6 @@
-"""
-=============================================================
-menus/access.py — Menu Kontrol Akses (RFID + Liveness + Face)
-=============================================================
-Alur akses lengkap:
-  1. Tunggu tap RFID
-  2. Cek UID di database         → DENIED_RFID
-  3. Kumpulkan frame 3 detik
-  4. Liveness Detection          → DENIED_SPOOF
-  5. Face Recognition (voting)   → DENIED_FACE
-  6. GRANTED → buka pintu → log
-=============================================================
-"""
+#-----ACCESS MENU-----
+# alur: rfid → db → liveness (lazy detect + blink) → verify wajah (cached crops)
+
 import time, os, sys, logging, json, random
 log = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -83,7 +73,7 @@ def _banner(mode=""):
     print(SEP2)
 
 def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=None):
-    """Proses satu siklus akses. Return status string."""
+    # proses satu siklus akses. return status string
     t_rfid = time.perf_counter()
     t_face_detect = None
 
@@ -109,14 +99,13 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     print(f"\n  {B}Kartu{NC}   : {uid_str}")
     print(f"  {B}Nama{NC}    : {nama}")
 
-    # Update state with user info
     if state_callback:
         state_callback(
             step=f"Kartu terdeteksi: {nama}",
             step_code="rfid",
             user_name=nama,
             similarity=None,
-                message="Silakan hadapkan wajah ke kamera"
+            message="Silakan hadapkan wajah ke kamera"
         )
 
     stored_embs = db.get_embeddings(uid_str)
@@ -126,7 +115,6 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                      user_id=user['id'], nama=nama)
         door.open(duration=config.DOOR_OPEN_SEC)
         waktu1, waktu2 = _report_timing()
-        # Update state for granted access
         if state_callback:
             state_callback(
                 step="Akses Diberikan (RFID only)",
@@ -141,11 +129,12 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             )
         return "GRANTED"
 
-    # --- TAHAP 1: LIVENESS (BLINK PRIORITIZED) ---
-    live_blinks = 0
+    #-----TAHAP 1: LIVENESS-----
+    live_blinks   = 0
     liveness_frames = []
-    face_box = None
-    lv_status = ""
+    face_crops_cached = []  # crop wajah di-cache untuk phase 2 (skip re-detect)
+    face_box      = None
+    lv_status     = ""
     liveness_score = None
     liveness_votes = None
     liveness_total = None
@@ -172,53 +161,82 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                     getattr(config, 'WEB_PORT', 5000),
                     active=True)
 
-        # Gunakan BlinkDetector pre-warmed dari LivenessDetector (tidak perlu init ulang)
         blink_detector = liveness.create_blink_detector()
         blink_detector.reset()
 
         early_exit_delay = float(getattr(config, "LIVENESS_EARLY_EXIT_DELAY", 1.0))
-        _blink_achieved_at = None  # timestamp saat blink terpenuhi
+        _blink_achieved_at = None
+
+        #-----LAZY FACE DETECTION-----
+        # blazeface hanya dipanggil saat: (1) belum ada face_box, atau
+        # (2) mediapipe gagal temukan landmark di crop (orang gerak/miring)
+        # semua frame berikutnya: reuse face_box lama → skip blazeface inference
+        # efek: blazeface ~1-3x vs sebelumnya 40x per sesi liveness
+        force_redetect = False
+        max_verify_frames = int(getattr(config, "LIVENESS_MAX_VERIFY_FRAMES", 10))
 
         t0 = time.time()
-        # Kumpulkan frame selama durasi liveness + real-time blink tracking
         while time.time() - t0 < config.LIVENESS_DURATION:
             frame = cam.read()
             if frame is None:
                 time.sleep(0.05)
                 continue
-            box = face_engine.detect_largest(frame)
-            if box is not None:
-                if face_box is None:
-                    face_box = box[:4]
+
+            #-----DETEKSI WAJAH (LAZY)-----
+            if face_box is None or force_redetect:
+                # pertama kali atau mediapipe gagal → jalankan blazeface
+                box = face_engine.detect_largest(frame)
+                force_redetect = False
+                if box is None:
+                    time.sleep(0.05)
+                    continue
+                face_box = box[:4]
+                if t_face_detect is None:
                     t_face_detect = time.perf_counter()
-                liveness_frames.append(frame)
-                crop = liveness._crop_face(frame, box[:4])
-                if crop.size > 0:
-                    blink_detector.update(crop)
-                    live_blinks = blink_detector.blink_count
-                    if state_callback:
-                        state_callback(
-                            step=f"Silakan BERKEDIP {required_blinks}x",
-                            step_code="liveness",
-                            user_name=nama,
-                            similarity=None,
+                log.debug(f"BlazeFace detect: box={face_box}")
+            # else: reuse face_box dari iterasi sebelumnya → skip blazeface
+
+            liveness_frames.append(frame)
+
+            crop = liveness._crop_face(frame, face_box)
+            if crop.size > 0 and crop.shape[0] > 20 and crop.shape[1] > 20:
+                # feed ke mediapipe blink detector
+                ear_result = blink_detector.update(crop)
+
+                # jika mediapipe return None = landmark tidak ditemukan di crop
+                # artinya orang mungkin geser/miring → force redetect frame berikutnya
+                if ear_result is None and blink_detector.mode == "mediapipe":
+                    force_redetect = True
+                    log.debug("MediaPipe landmark gagal → force redetect next frame")
+
+                live_blinks = blink_detector.blink_count
+
+                # cache crop untuk verifikasi wajah phase 2 (skip re-detect nanti)
+                if len(face_crops_cached) < max_verify_frames:
+                    face_crops_cached.append(crop.copy())
+
+                if state_callback:
+                    state_callback(
+                        step=f"Silakan BERKEDIP {required_blinks}x",
+                        step_code="liveness",
+                        user_name=nama,
+                        similarity=None,
+                        blinks=live_blinks,
+                        liveness_status="Mengecek...",
+                        message=f"Kedipan terdeteksi: {live_blinks}"
+                    )
+                _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                            getattr(config, 'WEB_PORT', 5000),
                             blinks=live_blinks,
-                            liveness_status="Mengecek...",
-                            message=f"Kedipan terdeteksi: {live_blinks}"
+                            liveness_status="Cek..."
                         )
-                    _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
-                                getattr(config, 'WEB_PORT', 5000),
-                                blinks=live_blinks,
-                                liveness_status="Cek..."
-                            )
-                    # Early-exit: jika blink terpenuhi, tunggu sebentar lalu keluar
-                    if live_blinks >= required_blinks:
-                        if _blink_achieved_at is None:
-                            _blink_achieved_at = time.time()
-                            log.debug(f"Blink terpenuhi ({live_blinks}/{required_blinks}), tunggu {early_exit_delay}s")
-                        elif time.time() - _blink_achieved_at >= early_exit_delay:
-                            log.debug("Early-exit liveness setelah blink terdeteksi")
-                            break
+                if live_blinks >= required_blinks:
+                    if _blink_achieved_at is None:
+                        _blink_achieved_at = time.time()
+                        log.debug(f"Blink terpenuhi ({live_blinks}/{required_blinks}), tunggu {early_exit_delay}s")
+                    elif time.time() - _blink_achieved_at >= early_exit_delay:
+                        log.debug("Early-exit liveness setelah blink terdeteksi")
+                        break
             time.sleep(0.08)
 
         if not liveness_frames or face_box is None:
@@ -328,7 +346,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 message="Liveness dinonaktifkan, lanjut verifikasi wajah"
             )
 
-    # --- TAHAP 2: VERIFIKASI WAJAH ---
+    #-----TAHAP 2: VERIFIKASI WAJAH-----
     _info("Memverifikasi identitas ...")
     if state_callback:
         state_callback(
@@ -341,15 +359,33 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             message="Mencocokkan wajah dengan database..."
         )
 
-    if config.LIVENESS_ENABLED:
-        # Batasi jumlah frame untuk verifikasi wajah (sampling merata)
-        max_vf = int(getattr(config, "LIVENESS_MAX_VERIFY_FRAMES", 10))
-        if len(liveness_frames) > max_vf:
-            step = max(1, len(liveness_frames) // max_vf)
-            verify_frames = liveness_frames[::step][:max_vf]
-        else:
-            verify_frames = list(liveness_frames)
+    def _sim_callback(sc):
+        if state_callback:
+            state_callback(
+                step="Verifikasi Wajah",
+                step_code="verify",
+                user_name=nama,
+                similarity=sc,
+                blinks=live_blinks,
+                liveness_status=lv_status,
+                message=f"Similarity: {sc*100:.1f}% (threshold: {config.FACE_MATCH_THRESH*100:.0f}%)"
+            )
+        _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                    getattr(config, 'WEB_PORT', 5000),
+                    similarity=sc, active=True)
+
+    if config.LIVENESS_ENABLED and face_crops_cached:
+        #-----VERIFY DARI CACHED CROPS-----
+        # gunakan crops yang sudah dikumpulkan saat liveness loop
+        # skip blazeface re-detect → langsung ke mobilefacenet
+        # ini eliminasi ~10 redundant inference di phase 2
+        log.debug(f"verify_multi_crop: {len(face_crops_cached)} cached crops")
+        match, score = face_engine.verify_multi_crop(
+            face_crops_cached, stored_embs, min_votes=2, callback=_sim_callback
+        )
     else:
+        #-----FALLBACK: liveness off atau tidak ada cached crops-----
+        # kumpulkan frame baru dan detect dari awal (path lama)
         verify_frames = []
         t0 = time.time()
         target_v = config.ENROLL_FRAMES
@@ -380,22 +416,10 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 )
             return "ERROR"
 
-    def _sim_callback(sc):
-        if state_callback:
-            state_callback(
-                step="Verifikasi Wajah",
-                step_code="verify",
-                user_name=nama,
-                similarity=sc,
-                blinks=live_blinks,
-                liveness_status=lv_status,
-                message=f"Similarity: {sc*100:.1f}% (threshold: {config.FACE_MATCH_THRESH*100:.0f}%)"
-            )
-        _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
-                    getattr(config, 'WEB_PORT', 5000),
-                    similarity=sc, active=True)
+        match, score = face_engine.verify_multi_frame(
+            verify_frames, stored_embs, min_votes=2, callback=_sim_callback
+        )
 
-    match, score = face_engine.verify_multi_frame(verify_frames, stored_embs, min_votes=2, callback=_sim_callback)
     pct = score * 100
     thr = config.FACE_MATCH_THRESH * 100
 
@@ -416,7 +440,6 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
         return "DENIED_FACE"
 
     _ok(f"Identitas Terverifikasi ({pct:.1f}%)")
-
     _ok(f"AKSES DITERIMA — {nama} ({pct:.1f}%)")
     db.catat_log(uid_str, "GRANTED", f"Face {pct:.1f}%, Liveness OK ({live_blinks} blink)",
                  user_id=user['id'], nama=nama)
@@ -452,7 +475,6 @@ def mode_akses_normal(db, face_engine, door, single_attempt=False, state_callbac
         input("  Tekan Enter ..."); return
     rfid = RFIDReader()
     rfid.start()
-    # Build HTTP callback if none provided
     if state_callback is None:
         state_callback = _make_http_callback()
     try:
@@ -496,7 +518,7 @@ def menu_toggle_liveness():
 
 
 def menu_uji_liveness(face_engine):
-    """Test liveness tanpa RFID — berguna untuk tuning threshold."""
+    # test liveness tanpa rfid, berguna untuk tuning threshold
     print(f"\n{SEP2}\n  UJI LIVENESS DETECTION\n{SEP2}")
     print(f"\n  Hadapkan wajah ke kamera dan BERKEDIPLAH selama {config.LIVENESS_DURATION:.0f}s")
     input("  Tekan Enter untuk mulai ...")
