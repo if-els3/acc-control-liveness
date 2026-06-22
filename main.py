@@ -123,12 +123,20 @@ def main():
     signal.signal(signal.SIGINT, _sig)
     input("  Tekan Enter untuk masuk ke menu ...")
  
+    admin_logged_in = False
     try:
         while True:
             tampilkan_menu(face_engine)
             pilih = input("\n  Pilihan: ").strip().lower()
  
             try:
+                if pilih in ['7', '8', '9', 'a', 'b'] and not admin_logged_in:
+                    from menus.admin import login_admin
+                    if login_admin():
+                        admin_logged_in = True
+                    else:
+                        continue
+                
                 if   pilih == '1': menu_akses_kontinu(db, face_engine, door)
                 elif pilih == '2': menu_akses_sekali(db, face_engine, door)
                 elif pilih == '3': menu_uji_liveness(face_engine)
