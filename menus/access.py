@@ -477,6 +477,9 @@ def mode_akses_normal(db, face_engine, door, single_attempt=False, state_callbac
     rfid.start()
     if state_callback is None:
         state_callback = _make_http_callback()
+        
+    last_tap_time = {}
+    
     try:
         while True:
             _banner("Menunggu kartu RFID ...")
@@ -485,6 +488,20 @@ def mode_akses_normal(db, face_engine, door, single_attempt=False, state_callbac
             uid, _ = rfid.scan(timeout=60)
             if uid is None:
                 continue
+                
+            now = time.time()
+            uid_str = str(uid)
+            rate_limit = getattr(config, 'RATE_LIMIT_DELAY', 0)
+            if rate_limit > 0:
+                if uid_str in last_tap_time:
+                    elapsed = now - last_tap_time[uid_str]
+                    if elapsed < rate_limit:
+                        wait_time = rate_limit - elapsed
+                        print(f"  {R}[!] Rate limit: Terlalu sering. Tunggu {wait_time:.1f}s sebelum tap lagi.{NC}")
+                        time.sleep(1)
+                        continue
+                last_tap_time[uid_str] = now
+                
             print(f"  Tap RFID   : {time.perf_counter() - t_scan:.2f}s")
             status = _proses_akses(str(uid), db, face_engine, liveness, door, cam, state_callback)
             if "DENIED" in status or status == "ERROR":

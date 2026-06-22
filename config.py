@@ -47,6 +47,9 @@ SPI_SPEED  = 1_000_000
 RFID_GAIN  = 0x70
 # Timeout scan kartu (detik)
 RFID_TIMEOUT = 15
+# Rate limit tap RFID (detik) untuk mencegah DoS
+RATE_LIMIT_DELAY = 5.0
+
 
 # ─── Servo / Pintu ────────────────────────────────────────
 # GPIO BCM numbering
