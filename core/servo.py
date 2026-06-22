@@ -7,10 +7,30 @@ import time
 import logging
 import sys
 import os
+import signal
+import atexit
 
 log = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
+
+_active_door = None
+
+def emergency_lock():
+    """Pastikan pintu terkunci saat program terminate."""
+    if _active_door:
+        try:
+            _active_door._set_duty(_active_door.close_duty)
+            log.info("Emergency lock: pintu dikunci")
+        except Exception as e:
+            log.warning(f"Gagal melakukan emergency lock: {e}")
+
+atexit.register(emergency_lock)
+try:
+    signal.signal(signal.SIGTERM, lambda s,f: emergency_lock())
+except ValueError:
+    pass
+
 
 try:
     import RPi.GPIO as GPIO
@@ -28,6 +48,8 @@ BCM_TO_BOARD = {
 
 class DoorController:
     def __init__(self):
+        global _active_door
+        _active_door = self
         self.pin = getattr(config, 'SERVO_PIN', 18)
         self.open_duty = getattr(config, 'SERVO_OPEN', 7.5)
         self.close_duty = getattr(config, 'SERVO_CLOSED', 2.5)
@@ -93,9 +115,20 @@ class DoorController:
         self._set_duty(self.close_duty)
 
     def cleanup(self):
+        log.info("Membersihkan kontroler pintu — Memastikan status fail-secure (terkunci).")
+        try:
+            self._set_duty(self.close_duty)
+        except Exception as e:
+            log.warning(f"Gagal mengatur servo ke posisi terkunci saat cleanup: {e}")
+            
         if GPIO_OK and self.pwm:
-            self.pwm.stop()
-            # Gunakan cleanup spesifik ke pin ini saja agar tidak mengganggu pin lain
-            GPIO.cleanup(self._pin_gpio)
+            try:
+                self.pwm.stop()
+            except Exception:
+                pass
+            try:
+                GPIO.cleanup(self._pin_gpio)
+            except Exception:
+                pass
 
 
