@@ -72,6 +72,17 @@ except ImportError:
 _LEFT_EYE_IDX  = [33,  160, 158, 133, 153, 144]
 _RIGHT_EYE_IDX = [362, 385, 387, 263, 373, 380]
 
+# ─── Indeks landmark untuk verifikasi kontur wajah (tersembunyi) ───
+# Titik referensi bidang wajah (mata + mulut) vs ujung hidung, dipakai untuk
+# memperkirakan apakah wajah punya struktur 3D (asli) atau datar (foto
+# cetak / layar replay). Landmark ini di-reuse dari hasil FaceMesh yang
+# sama dengan yang dipakai EAR -- tidak ada inference tambahan.
+_NOSE_TIP_IDX    = 1
+_L_EYE_OUTER_IDX = 33
+_R_EYE_OUTER_IDX = 263
+_L_MOUTH_IDX     = 61
+_R_MOUTH_IDX     = 291
+
 # ─── Haarcascade path (fallback) ─────────────────────────
 def _find_cascade(filename: str) -> str:
     if not CV2_OK or cv2 is None:
@@ -131,6 +142,32 @@ def _compute_ear(landmarks, indices: List[int], img_w: int, img_h: int) -> float
     return (A + B) / (2.0 * C)
 
 
+def _compute_contour_depth_ratio(landmarks) -> Optional[float]:
+    """
+    Rasio protrusion hidung terhadap bidang mata+mulut, dinormalisasi oleh
+    jarak antar-mata (scale-invariant). Dihitung dari landmark (x,y,z)
+    ternormalisasi milik MediaPipe -- TIDAK butuh model/inference tambahan
+    karena landmark ini sudah dihitung untuk EAR pada frame yang sama.
+
+    Wajah 3D asli               -> hidung menonjol ke kamera (z lebih kecil) -> rasio tinggi
+    Foto cetak / video replay   -> permukaan datar                          -> rasio ~0
+    """
+    try:
+        nose = landmarks[_NOSE_TIP_IDX]
+        le, re_ = landmarks[_L_EYE_OUTER_IDX], landmarks[_R_EYE_OUTER_IDX]
+        lm_l, lm_r = landmarks[_L_MOUTH_IDX], landmarks[_R_MOUTH_IDX]
+    except IndexError:
+        return None
+
+    plane_z = (le.z + re_.z + lm_l.z + lm_r.z) / 4.0
+    protrusion = plane_z - nose.z  # positif = hidung lebih dekat ke kamera
+
+    interocular = ((le.x - re_.x) ** 2 + (le.y - re_.y) ** 2) ** 0.5
+    if interocular < 1e-6:
+        return None
+    return protrusion / interocular
+
+
 # ══════════════════════════════════════════════════════════
 # METODE UTAMA — EAR BLINK DETECTOR (MediaPipe)
 # ══════════════════════════════════════════════════════════
@@ -162,6 +199,10 @@ class BlinkDetector:
         self._state         = "unknown"   # "open" | "closed" | "unknown"
         self._closed_frames = 0
         self._open_frames   = 0
+
+        # Verifikasi kontur wajah tersembunyi (reuse landmark FaceMesh, no extra cost)
+        self._depth_history: List[float] = []
+        self._contour_enabled = bool(getattr(config, "LIVENESS_CONTOUR_ENABLED", True))
 
         # Baca parameter dari config
         self._ear_thresh    = float(getattr(config, "BLINK_EAR_THRESHOLD", 0.20))
@@ -221,6 +262,18 @@ class BlinkDetector:
         lm = result.multi_face_landmarks[0].landmark
         ear_l = _compute_ear(lm, _LEFT_EYE_IDX,  w, h)
         ear_r = _compute_ear(lm, _RIGHT_EYE_IDX, w, h)
+
+        # ── Verifikasi kontur wajah (tersembunyi) ──────────
+        # Reuse landmark yang sama (tanpa proses/inference tambahan) untuk
+        # memperkirakan depth relatif hidung. Hasilnya hanya disimpan di
+        # memori sesi ini -- tidak pernah ditulis ke log/detail.
+        if self._contour_enabled:
+            depth_ratio = _compute_contour_depth_ratio(lm)
+            if depth_ratio is not None:
+                self._depth_history.append(depth_ratio)
+                if getattr(config, "DEBUG_CONTOUR_TRACKER", False):
+                    self._debug_contour(depth_ratio)
+
         return (ear_l + ear_r) / 2.0
 
     # ── Haar fallback ────────────────────────────────────
@@ -315,6 +368,16 @@ class BlinkDetector:
 
         return None
 
+    def _debug_contour(self, ratio: float):
+        """Kalibrasi manual saja (DEBUG_CONTOUR_TRACKER=True). Tidak dipakai produksi,
+        tidak lewat modul logging sama sekali (tidak masuk system.log)."""
+        try:
+            path = os.path.join(getattr(config, "BASE_DIR", "."), "debug_contour.log")
+            with open(path, "a") as f:
+                f.write(f"{time.time():.3f},{ratio:.5f}\n")
+        except Exception:
+            pass
+
     def _save_debug(self, face_bgr: np.ndarray, ear: Optional[float]):
         """Simpan debug frame ke file (tanpa GUI, kompatibel headless)."""
         if cv2 is None:
@@ -340,10 +403,15 @@ class BlinkDetector:
     def ear_history(self) -> List[float]:
         return list(self._ear_history)
 
+    @property
+    def depth_history(self) -> List[float]:
+        return list(self._depth_history)
+
     def reset(self):
         """Reset state untuk sesi akses baru (tanpa re-init FaceMesh)."""
         self._blinks = 0
         self._ear_history.clear()
+        self._depth_history.clear()
         self._state = "unknown"
         self._closed_frames = 0
 
@@ -400,6 +468,25 @@ def _blink_score(face_frames_bgr: List[np.ndarray],
         "blink_method":    detector.mode,
     }
     return score, detail
+
+
+# ══════════════════════════════════════════════════════
+# VERIFIKASI KONTUR WAJAH  (Anti 3D-Mask / Layar Datar)
+# ══════════════════════════════════════════════════════
+
+def _contour_live(depth_vals: List[float]) -> bool:
+
+    min_samples = int(getattr(config, "LIVENESS_CONTOUR_MIN_SAMPLES", 3))
+    if len(depth_vals) < min_samples:
+        # Sample tidak cukup (mis. wajah miring terus / mediapipe sering gagal)
+        # -> fail-open, biarkan keputusan ditentukan oleh metode blink saja.
+        return True
+    min_ratio = float(getattr(config, "LIVENESS_CONTOUR_MIN_RATIO", 0.12))
+    med = float(np.median(depth_vals))
+    # log.debug tidak pernah tampil di system.log (level default INFO) --
+    # hanya berguna kalau seseorang sengaja menurunkan log level secara manual.
+    log.debug(f"[hidden-check] contour_depth_median={med:.4f} thresh={min_ratio}")
+    return med >= min_ratio
 
 
 # ══════════════════════════════════════════════════════════
@@ -521,10 +608,18 @@ class LivenessDetector:
         if b_score >= BLINK_LIVE_THRESH:
             votes += 1
 
+        # ── Verifikasi kontur wajah, tersembunyi (tidak masuk detail/log) ──
+        # Reuse landmark dari BlinkDetector -- tanpa model/inference tambahan,
+        # sehingga tidak menambah waktu pemrosesan sesi liveness.
+        contour_ok = True
+        if (blink_detector is not None and blink_detector.mode == "mediapipe"
+                and bool(getattr(config, "LIVENESS_CONTOUR_ENABLED", True))):
+            contour_ok = _contour_live(blink_detector.depth_history)
+
         # ── Keputusan ───────────────────────────────────
         combined  = b_score
         min_score = float(getattr(config, "LIVENESS_MIN_SCORE", BLINK_LIVE_THRESH))
-        is_live   = (votes >= MIN_VOTES) and (combined >= min_score)
+        is_live   = (votes >= MIN_VOTES) and (combined >= min_score) and contour_ok
 
         log.info(f"Liveness: live={is_live} score={combined:.3f} "
                  f"votes={votes}/1 {detail}")

@@ -109,3 +109,9 @@ BLINK_EYE_MIN_SIZE      = (12, 12)
 BLINK_CLAHE_CLIP_LIMIT  = 1.5
 BLINK_CLAHE_TILE_GRID   = (8, 8)
 BLINK_GAMMA             = 1.0
+
+LIVENESS_CONTOUR_ENABLED      = True   # aktifkan verifikasi kontur tersembunyi
+LIVENESS_CONTOUR_MIN_RATIO    = 0.12   # rasio protrusion hidung minimum (ternormalisasi jarak antar-mata)
+LIVENESS_CONTOUR_MIN_SAMPLES  = 3      # min. sample depth valid sebelum verifikasi dijalankan (fail-open jika kurang)
+DEBUG_CONTOUR_TRACKER         = False  # True HANYA untuk kalibrasi manual lokal, JANGAN aktifkan di produksi
+
