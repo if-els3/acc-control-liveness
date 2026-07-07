@@ -18,16 +18,20 @@ _active_door = None
 
 def emergency_lock():
     """Pastikan pintu terkunci saat program terminate."""
+    global _active_door
     if _active_door:
         try:
+            # Pastikan mode GPIO aktif sebelum mengunci saat emergency
+            _active_door._ensure_gpio_mode()
             _active_door._set_duty(_active_door.close_duty)
             log.info("Emergency lock: pintu dikunci")
         except Exception as e:
+            # Gunakan penanganan exception yang aman agar runtime C++/Python tidak abort
             log.warning(f"Gagal melakukan emergency lock: {e}")
 
 atexit.register(emergency_lock)
 try:
-    signal.signal(signal.SIGTERM, lambda s,f: emergency_lock())
+    signal.signal(signal.SIGTERM, lambda s, f: emergency_lock())
 except ValueError:
     pass
 
@@ -55,30 +59,33 @@ class DoorController:
         self.close_duty = getattr(config, 'SERVO_CLOSED', 2.5)
         self.pwm = None
         self._pin_gpio = self.pin
+        self._cleaned_up = False
+
+    def _ensure_gpio_mode(self):
+        """Memeriksa dan mengatur ulang mode GPIO jika sempat ter-reset oleh modul lain."""
+        if not GPIO_OK:
+            return
+        cur = GPIO.getmode()
+        if cur is None:
+            # Set ulang ke mode BCM jika sebelumnya sudah terhapus
+            GPIO.setmode(GPIO.BCM)
+            self._pin_gpio = self.pin
+        elif cur == GPIO.BCM:
+            self._pin_gpio = self.pin
+        elif cur == GPIO.BOARD:
+            pin_board = getattr(config, "SERVO_PIN_BOARD", None)
+            if pin_board is None:
+                pin_board = BCM_TO_BOARD.get(self.pin)
+            if not pin_board:
+                raise RuntimeError("GPIO mode BOARD aktif. Set config.SERVO_PIN_BOARD.")
+            self._pin_gpio = pin_board
 
     def start(self):
         """Inisialisasi awal saat sistem booting."""
         log.info(f"Menginisiasi Servo pada pin GPIO {self.pin}")
         if GPIO_OK:
-            cur = GPIO.getmode()
-            if cur is None:
-                GPIO.setmode(GPIO.BCM)
-                self._pin_gpio = self.pin
-            elif cur == GPIO.BCM:
-                self._pin_gpio = self.pin
-            elif cur == GPIO.BOARD:
-                pin_board = getattr(config, "SERVO_PIN_BOARD", None)
-                if pin_board is None:
-                    pin_board = BCM_TO_BOARD.get(self.pin)
-                if not pin_board:
-                    raise RuntimeError(
-                        "GPIO mode BOARD aktif. Set config.SERVO_PIN_BOARD."
-                    )
-                self._pin_gpio = pin_board
-            else:
-                raise RuntimeError(f"GPIO mode tidak dikenali: {cur}")
+            self._ensure_gpio_mode()
             GPIO.setwarnings(False)
-            # Inisialisasi awal
             GPIO.setup(self._pin_gpio, GPIO.OUT)
             self.pwm = GPIO.PWM(self._pin_gpio, 50)
             self.pwm.start(0)
@@ -90,20 +97,17 @@ class DoorController:
         if not GPIO_OK:
             return
             
-        # PENTING: Force setup pin sebagai OUTPUT setiap kali akan digunakan.
-        # Ini mencegah error jika modul lain (RFID/LCD) tidak sengaja melakukan cleanup.
+        self._ensure_gpio_mode()
         GPIO.setup(self._pin_gpio, GPIO.OUT)
         
-        # Aktifkan sinyal
         GPIO.output(self._pin_gpio, True)
-        if self.pwm is None: # Jaga-jaga jika objek PWM hilang
+        if self.pwm is None:
             self.pwm = GPIO.PWM(self._pin_gpio, 50)
             self.pwm.start(0)
             
         self.pwm.ChangeDutyCycle(duty)
         time.sleep(0.4)
         
-        # Matikan sinyal untuk mencegah servo bergetar (jitter)
         GPIO.output(self._pin_gpio, False)
         self.pwm.ChangeDutyCycle(0)
 
@@ -115,20 +119,25 @@ class DoorController:
         self._set_duty(self.close_duty)
 
     def cleanup(self):
+        """Membersihkan kontroler pintu dan memastikan posisi terkunci secara aman."""
+        if self._cleaned_up:
+            return
         log.info("Membersihkan kontroler pintu — Memastikan status fail-secure (terkunci).")
         try:
+            self._ensure_gpio_mode()
             self._set_duty(self.close_duty)
         except Exception as e:
             log.warning(f"Gagal mengatur servo ke posisi terkunci saat cleanup: {e}")
             
-        if GPIO_OK and self.pwm:
+        if GPIO_OK:
+            if self.pwm:
+                try:
+                    self.pwm.stop()
+                except Exception:
+                    pass
             try:
-                self.pwm.stop()
-            except Exception:
-                pass
-            try:
+                # Cleanup khusus pin servo saja agar tidak merusak modul lain
                 GPIO.cleanup(self._pin_gpio)
             except Exception:
                 pass
-
-
+        self._cleaned_up = True

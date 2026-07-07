@@ -65,8 +65,18 @@ def init_system():
  
  
 def cleanup(door):
-    try: door.cleanup()
-    except Exception: pass
+    try:
+        # Panggil cleanup pintu (mengunci servo dan melepas pin)
+        door.cleanup()
+    except Exception as e:
+        log.warning(f"Peringatan saat cleanup servo: {e}")
+        
+    try:
+        # Opsional: Lepaskan sisa pin GPIO jika ada yang tertinggal
+        import RPi.GPIO as GPIO
+        GPIO.cleanup()
+    except Exception:
+        pass
     log.info("Sistem dihentikan")
  
  
@@ -160,6 +170,16 @@ def main():
         print(f"\n{SEP2}")
         print("  Menutup sistem ...")
         cleanup(door)
+        
+        # Unregister emergency_lock dari atexit agar tidak dipanggil ulang
+        # setelah cleanup normal berhasil dieksekusi
+        try:
+            import atexit
+            from core.servo import emergency_lock
+            atexit.unregister(emergency_lock)
+        except Exception:
+            pass
+            
         print("  Sampai jumpa!")
         print(SEP2)
  
