@@ -488,141 +488,156 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Access Control Monitor</title>
+<title>Access Control</title>
 <style>
   :root {
-    --bg: #0d0d0d; --card: #181818; --border: #2a2a2a;
-    --green: #22c55e; --red: #ef4444; --yellow: #eab308;
-    --blue: #3b82f6; --text: #e5e5e5; --muted: #666;
+    --bg: #000;
+    --glass-bg: rgba(15, 15, 15, 0.65);
+    --glass-border: rgba(255, 255, 255, 0.1);
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #eab308;
+    --text: #ffffff;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif;
-         display: grid; grid-template-rows: auto 1fr auto; min-height: 100vh; }
+  body { 
+    background: var(--bg); color: var(--text); 
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    overflow: hidden; 
+    height: 100vh; width: 100vw;
+  }
 
-  header { padding: 12px 20px; background: var(--card); border-bottom: 1px solid var(--border);
-           display: flex; align-items: center; gap: 12px; }
-  header h1 { font-size: 1.1rem; font-weight: 600; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green);
-         animation: pulse 1.5s infinite; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .cam-wrap { 
+    position: absolute;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    z-index: 1;
+    background: #000;
+  }
+  .cam-wrap img { 
+    width: 100%; height: 100%; 
+    object-fit: contain;
+    object-position: center center;
+  }
 
-  main { display: grid; grid-template-columns: 1fr 360px; gap: 16px; padding: 16px; }
+  .overlay-container {
+    position: absolute;
+    bottom: 8%;
+    left: 50%;
+    transform: translateX(-50%) translateY(40px);
+    z-index: 10;
+    opacity: 0;
+    transition: all 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+    will-change: transform, opacity;
+  }
+  .overlay-container.active {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 
-  .cam-wrap { position: relative; background: #000; border-radius: 10px; overflow: hidden;
-              aspect-ratio: 4/3; display: flex; align-items: center; justify-content: center; }
-  .cam-wrap img { width: 100%; height: 100%; object-fit: contain; }
-
-  .sidebar { display: flex; flex-direction: column; gap: 12px; }
-
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
-          padding: 14px 16px; }
-  .card h2 { font-size: .75rem; text-transform: uppercase; letter-spacing: .08em;
-             color: var(--muted); margin-bottom: 10px; }
+  .glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: 24px;
+    padding: 24px 48px;
+    text-align: center;
+    min-width: 320px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  }
 
   #step-badge {
-    display: inline-block; padding: 6px 14px; border-radius: 20px;
-    font-size: 1rem; font-weight: 700; margin-bottom: 6px;
-    background: var(--blue); color: #fff; transition: background .3s;
+    display: inline-block; padding: 8px 24px; border-radius: 30px;
+    font-size: 1.1rem; font-weight: 600; margin-bottom: 12px;
+    background: rgba(255, 255, 255, 0.15); color: #fff;
+    transition: background 0.4s ease, box-shadow 0.4s ease;
+    letter-spacing: 0.5px;
   }
-  #step-badge.granted { background: var(--green); }
-  #step-badge.denied  { background: var(--red); }
-  #step-badge.liveness{ background: var(--yellow); color: #111; }
+  #step-badge.granted { background: rgba(34, 197, 94, 0.85); box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3); }
+  #step-badge.denied  { background: rgba(239, 68, 68, 0.85); box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3); }
+  #step-badge.liveness{ background: rgba(234, 179, 8, 0.85); color: #000; }
 
-  #step-text  { font-size: .9rem; color: var(--muted); }
-  #user-name  { font-size: 1.4rem; font-weight: 700; margin-top: 4px; }
-  #similarity-bar { height: 6px; background: var(--border); border-radius: 3px; margin-top: 8px; }
-  #similarity-fill { height: 100%; border-radius: 3px; background: var(--green);
-                     width: 0; transition: width .4s; }
-  #similarity-label { font-size: .75rem; color: var(--muted); margin-top: 4px; }
+  #step-text { font-size: 1.15rem; color: rgba(255,255,255,0.9); font-weight: 500; }
+  #user-name { font-size: 1.5rem; font-weight: 700; margin-top: 12px; }
 
-  .log-list { list-style: none; max-height: 220px; overflow-y: auto; }
-  .log-list li { display: flex; justify-content: space-between; align-items: center;
-                 padding: 5px 0; border-bottom: 1px solid var(--border); font-size: .8rem; }
-  .log-list li:last-child { border: none; }
-  .tag { padding: 2px 7px; border-radius: 4px; font-size: .7rem; font-weight: 600; }
-  .tag.GRANTED      { background: #14532d; color: var(--green); }
-  .tag.DENIED_FACE  { background: #450a0a; color: var(--red); }
-  .tag.DENIED_RFID  { background: #1e1b4b; color: #a5b4fc; }
-  .tag.LIVENESS_FAIL{ background: #422006; color: var(--yellow); }
-  .tag.ERROR        { background: #3b0764; color: #e879f9; }
-  .tag.DENIED       { background: #450a0a; color: var(--red); }
-  .tag.ENROLL       { background: #0c4a6e; color: #7dd3fc; }
+  .flawless-hover {
+    position: absolute;
+    top: 6%;
+    left: 50%;
+    transform: translateX(-50%) translateY(-20px);
+    background: rgba(20, 20, 20, 0.5);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 10px 24px;
+    border-radius: 30px;
+    font-size: 0.9rem;
+    color: rgba(255,255,255,0.8);
+    z-index: 10;
+    opacity: 0;
+    transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: none;
+    display: flex;
+    align-items: center;
+    will-change: transform, opacity;
+  }
+  .flawless-hover.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  .dot { 
+    display: inline-block; width: 8px; height: 8px; 
+    border-radius: 50%; background: var(--green); 
+    margin-right: 10px; box-shadow: 0 0 10px var(--green);
+    animation: pulse 2s infinite; 
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
 
-  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .stat { background: var(--bg); border-radius: 8px; padding: 10px 12px; }
-  .stat .val { font-size: 1.5rem; font-weight: 700; }
-  .stat .lbl { font-size: .7rem; color: var(--muted); }
-
-  footer { padding: 8px 20px; background: var(--card); border-top: 1px solid var(--border);
-           font-size: .7rem; color: var(--muted); text-align: center; }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="dot" id="dot"></div>
-  <h1>🔐 Access Control Monitor</h1>
-  <span style="margin-left:auto;font-size:.75rem;color:var(--muted)" id="clock"></span>
-</header>
-
-<main>
-  <!-- Kamera -->
   <div class="cam-wrap">
     <img id="stream" src="/stream" alt="Camera stream">
   </div>
 
-  <!-- Sidebar -->
-  <div class="sidebar">
-
-    <!-- Status kartu -->
-    <div class="card">
-      <h2>Status Saat Ini</h2>
-      <span id="step-badge">Idle</span>
-      <div id="step-text">Menunggu…</div>
+  <div class="overlay-container" id="overlay">
+    <div class="glass-panel">
+      <div id="step-badge" class="idle">Menunggu...</div>
+      <div id="step-text">Silakan Tap Kartu</div>
       <div id="user-name" style="display:none"></div>
-      <div id="similarity-bar" style="display:none">
-        <div id="similarity-fill"></div>
-      </div>
-      <div id="similarity-label"></div>
     </div>
-
-    <!-- Statistik -->
-    <div class="card">
-      <h2>Statistik</h2>
-      <div class="stats-grid">
-        <div class="stat"><div class="val" id="s-users">–</div><div class="lbl">Pengguna</div></div>
-        <div class="stat"><div class="val" id="s-total">–</div><div class="lbl">Total Akses</div></div>
-        <div class="stat"><div class="val" id="s-granted" style="color:var(--green)">–</div><div class="lbl">Diberikan</div></div>
-        <div class="stat"><div class="val" id="s-denied"  style="color:var(--red)">–</div><div class="lbl">Ditolak</div></div>
-      </div>
-    </div>
-
-    <!-- Log terakhir -->
-    <div class="card" style="flex:1">
-      <h2>Log Terakhir</h2>
-      <ul class="log-list" id="log-list"></ul>
-    </div>
-
   </div>
-</main>
 
-<footer>Raspberry Pi Access Control &mdash; AES-128-GCM Encrypted &mdash; BlazeFace + MobileFaceNet</footer>
+  <div class="flawless-hover" id="periodic-hover">
+    <span class="dot"></span>Sistem Aktif
+  </div>
 
 <script>
 const STEP_MAP = {
-  idle    : ["Menunggu RFID", ""],
-  rfid    : ["Tap Kartu RFID", ""],
-  liveness: ["Liveness Detection", "liveness"],
-  verify  : ["Verifikasi Wajah", ""],
-  granted : ["Akses Diberikan ✅", "granted"],
-  denied  : ["Akses Ditolak ❌", "denied"],
+  idle    : ["Standby", "idle"],
+  rfid    : ["Tap Kartu RFID", "idle"],
+  liveness: ["Liveness Check", "liveness"],
+  verify  : ["Verifikasi", "idle"],
+  granted : ["Akses Diberikan", "granted"],
+  denied  : ["Akses Ditolak", "denied"],
 };
+
+let hideTimeout;
+let lastStepCode = 'idle';
 
 async function refreshState() {
   try {
     const s = await fetch("/api/state").then(r=>r.json());
     const badge = document.getElementById("step-badge");
-    const [label, cls] = STEP_MAP[s.step_code] || [s.step, ""];
+    const overlay = document.getElementById("overlay");
+    const [label, cls] = STEP_MAP[s.step_code] || [s.step, "idle"];
+    
     badge.textContent = label;
     badge.className   = cls;
     document.getElementById("step-text").textContent = s.step;
@@ -635,58 +650,38 @@ async function refreshState() {
       nameEl.style.display = "none";
     }
 
-    const barEl  = document.getElementById("similarity-bar");
-    const fillEl = document.getElementById("similarity-fill");
-    const lblEl  = document.getElementById("similarity-label");
-    if (s.similarity !== null && s.similarity !== undefined) {
-      barEl.style.display = "block";
-      const pct = Math.round(s.similarity * 100);
-      fillEl.style.width = pct + "%";
-      fillEl.style.background = pct >= 72 ? "var(--green)" : pct >= 55 ? "var(--yellow)" : "var(--red)";
-      lblEl.textContent = `Kemiripan: ${pct}%`;
+    if (s.step_code === 'idle') {
+      if (lastStepCode !== 'idle') {
+        clearTimeout(hideTimeout);
+        hideTimeout = setTimeout(() => {
+          overlay.classList.remove('active');
+        }, 4000); 
+      }
     } else {
-      barEl.style.display = "none";
-      lblEl.textContent = "";
+      clearTimeout(hideTimeout);
+      overlay.classList.add('active');
     }
+    
+    lastStepCode = s.step_code;
   } catch(e) {}
 }
 
-async function refreshLogs() {
-  try {
-    const logs = await fetch("/api/logs").then(r=>r.json());
-    const ul = document.getElementById("log-list");
-    ul.innerHTML = logs.map(l => `
-      <li>
-        <span>${l.nama || l.rfid_uid || '—'}</span>
-        <span class="tag ${l.status}">${l.status}</span>
-      </li>`).join("");
-  } catch(e) {}
+function showFlawlessHover() {
+  const hoverEl = document.getElementById("periodic-hover");
+  hoverEl.classList.add("show");
+  setTimeout(() => {
+    hoverEl.classList.remove("show");
+  }, 5000);
 }
 
-async function refreshStats() {
-  try {
-    const s = await fetch("/api/stats").then(r=>r.json());
-    document.getElementById("s-users"  ).textContent = s.total_user  ?? s.total_users ?? '–';
-    document.getElementById("s-total"  ).textContent = s.total_log   ?? '–';
-    document.getElementById("s-granted").textContent = s.granted     ?? '–';
-    document.getElementById("s-denied" ).textContent = (s.denied_face || 0) + (s.denied_rfid || 0);
-  } catch(e) {}
-}
+setInterval(refreshState, 600);
+setInterval(showFlawlessHover, 600000); 
 
-function tick() {
-  const now = new Date();
-  document.getElementById("clock").textContent =
-    now.toLocaleTimeString("id-ID");
-}
+setTimeout(() => {
+  refreshState();
+  showFlawlessHover();
+}, 500);
 
-// Polling intervals
-setInterval(refreshState, 800);
-setInterval(refreshLogs,  3000);
-setInterval(refreshStats, 5000);
-setInterval(tick, 1000);
-
-// Initial load
-refreshState(); refreshLogs(); refreshStats(); tick();
 </script>
 </body>
 </html>"""
