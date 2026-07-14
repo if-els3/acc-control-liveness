@@ -125,43 +125,46 @@ def main():
         print(f"     http://{host}:{port}/")
         print(f"     http://{host}:{port}/display")
         
-        try:
-            import subprocess
-            import os
-            import shutil
-            env = os.environ.copy()
-            if "DISPLAY" not in env:
-                env["DISPLAY"] = ":0"
-            
-            # Deteksi browser yang tersedia
-            if shutil.which("chromium-browser"):
-                browser_cmd = [
-                    "chromium-browser",
-                    "--kiosk",
-                    "--noerrdialogs",
-                    "--disable-infobars",
-                    f"http://127.0.0.1:{port}/"
-                ]
-                browser_name = "Chromium"
-            elif shutil.which("firefox"):
-                # Firefox mendukung kiosk mode dengan argumen --kiosk
-                browser_cmd = [
-                    "firefox",
-                    "--kiosk",
-                    f"http://127.0.0.1:{port}/"
-                ]
-                browser_name = "Firefox"
-            else:
-                browser_cmd = None
-                browser_name = "Tidak ditemukan"
+        if "--prod" in sys.argv:
+            try:
+                import subprocess
+                import os
+                import shutil
+                env = os.environ.copy()
+                if "DISPLAY" not in env:
+                    env["DISPLAY"] = ":0"
+                
+                # Deteksi browser yang tersedia
+                if shutil.which("chromium-browser"):
+                    browser_cmd = [
+                        "chromium-browser",
+                        "--kiosk",
+                        "--noerrdialogs",
+                        "--disable-infobars",
+                        f"http://127.0.0.1:{port}/"
+                    ]
+                    browser_name = "Chromium"
+                elif shutil.which("firefox"):
+                    # Firefox mendukung kiosk mode dengan argumen --kiosk
+                    browser_cmd = [
+                        "firefox",
+                        "--kiosk",
+                        f"http://127.0.0.1:{port}/"
+                    ]
+                    browser_name = "Firefox"
+                else:
+                    browser_cmd = None
+                    browser_name = "Tidak ditemukan"
 
-            if browser_cmd:
-                browser_process = subprocess.Popen(browser_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print(f"  [5/5] Membuka Kiosk Browser ({browser_name}) ... OK")
-            else:
-                print("  [5/5] Membuka Kiosk Browser ... Gagal (Chromium/Firefox tidak terinstall)")
-        except Exception as e:
-            print(f"  [5/5] Membuka Kiosk Browser ... Gagal ({e})")
+                if browser_cmd:
+                    browser_process = subprocess.Popen(browser_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    print(f"  [5/5] Membuka Kiosk Browser ({browser_name}) ... OK")
+                else:
+                    print("  [5/5] Membuka Kiosk Browser ... Gagal (Chromium/Firefox tidak terinstall)")
+            except Exception as e:
+                print(f"  [5/5] Membuka Kiosk Browser ... Gagal ({e})")
+        else:
+            print("  [5/5] Mode Standar (Akses web dari perangkat lain, tanpa membuka browser lokal)")
             
     except Exception as e:
         log.error(f"Gagal memulai web interface: {e}")
