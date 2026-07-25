@@ -564,7 +564,7 @@ def run_simulation():
             rgb = cv2.cvtColor(base_frame, cv2.COLOR_BGR2RGB)
             face_landmarks_result = mesh.process(rgb)
 
-        if face_landmarks_result and face_landmarks_result.multi_face_landmarks:
+if face_landmarks_result and face_landmarks_result.multi_face_landmarks:
             lms = face_landmarks_result.multi_face_landmarks[0].landmark
             depth_r = _compute_contour_depth_ratio(lms)
             if depth_r is not None:
@@ -576,7 +576,9 @@ def run_simulation():
                             dr = _compute_contour_depth_ratio(r2.multi_face_landmarks[0].landmark)
                             if dr is not None:
                                 depth_history.append(dr)
-            print(f"          Landmarks: 468  depth_ratio={depth_r:.5f if depth_r else 'N/A'}")
+            
+            depth_str = f"{depth_r:.5f}" if depth_r is not None else "N/A"
+            print(f"          Landmarks: 468  depth_ratio={depth_str}")
         else:
             print("          No landmarks found.")
     else:
