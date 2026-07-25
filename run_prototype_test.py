@@ -564,19 +564,18 @@ def run_simulation():
             rgb = cv2.cvtColor(base_frame, cv2.COLOR_BGR2RGB)
             face_landmarks_result = mesh.process(rgb)
 
-if face_landmarks_result and face_landmarks_result.multi_face_landmarks:
-            lms = face_landmarks_result.multi_face_landmarks[0].landmark
-            depth_r = _compute_contour_depth_ratio(lms)
-            if depth_r is not None:
-                # Also collect across all frames for history
-                for f in frames:
-                    with mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1) as m2:
-                        r2 = m2.process(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
-                        if r2 and r2.multi_face_landmarks:
-                            dr = _compute_contour_depth_ratio(r2.multi_face_landmarks[0].landmark)
-                            if dr is not None:
-                                depth_history.append(dr)
-            
+    if face_landmarks_result and face_landmarks_result.multi_face_landmarks:
+        lms = face_landmarks_result.multi_face_landmarks[0].landmark
+        depth_r = _compute_contour_depth_ratio(lms)
+        if depth_r is not None:
+            # Also collect across all frames for history
+            for f in frames:
+                with mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1) as m2:
+                    r2 = m2.process(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
+                    if r2 and r2.multi_face_landmarks:
+                        dr = _compute_contour_depth_ratio(r2.multi_face_landmarks[0].landmark)
+                        if dr is not None:
+                            depth_history.append(dr)
             depth_str = f"{depth_r:.5f}" if depth_r is not None else "N/A"
             print(f"          Landmarks: 468  depth_ratio={depth_str}")
         else:
