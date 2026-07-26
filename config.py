@@ -94,19 +94,8 @@ LIVENESS_MIN_SCORE     = 0.60    # threshold skor blink final
 LIVENESS_MIN_VOTES     = 1       # cukup 1 vote LIVE
 LIVENESS_FACE_PAD      = 0.25    # padding crop wajah
 LIVENESS_EARLY_EXIT_DELAY = 1.0  # detik tambahan setelah blink terdeteksi lalu keluar
-LIVENESS_MAX_VERIFY_FRAMES = 15  # maks frame yg diproses untuk verifikasi wajah
-
-# ─── Verification Voting Strategy ────────────────────────
-# Jumlah minimum frame yang harus match untuk dinyatakan GRANTED.
-# ADAPTIVE: jika None, dihitung otomatis = max(2, floor(total_crops * 0.30))
-# artinya cukup ~30% frame cocok → mengurangi pengaruh frame buruk (blur/gerak)
-VERIFY_MIN_VOTES      = None  # None = adaptive (recommended dengan threshold tinggi)
-
-# Toleransi skor: saat voting, frame dianggap "match" jika skor >= FACE_MATCH_THRESH.
-# Namun untuk menghitung skor RATA-RATA yang dilaporkan, semua frame dipakai.
-# Set True untuk menggunakan skor TERTINGGI (bukan rata-rata) sebagai keputusan akhir.
-# Berguna saat threshold tinggi dan enrollment mencakup banyak variasi pose.
-VERIFY_USE_BEST_SCORE = True  # True = ambil skor tertinggi dari semua crops
+LIVENESS_MAX_VERIFY_FRAMES = 10  # maks frame yg diproses untuk verifikasi wajah
+                                  # (nilai asli saat pengujian FAR/FRR/EER)
 
 # ── EAR (Eye Aspect Ratio) — METODE UTAMA ─────────────────
 # Digunakan jika MediaPipe terinstall (pip install mediapipe).

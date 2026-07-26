@@ -270,41 +270,20 @@ class FaceEngine:
             s_arr = np.array(stored, dtype=np.float32)
             score = np.dot(live_emb, s_arr)
             if score > best_score: best_score = score
-
-        use_best = bool(getattr(config, "VERIFY_USE_BEST_SCORE", True))
-        thresh   = float(getattr(config, "FACE_MATCH_THRESH", config.FACE_MATCH_THRESH))
-        return best_score >= thresh, float(best_score)
+            
+        return best_score >= config.FACE_MATCH_THRESH, float(best_score)
 
     def verify_multi_frame(self, frames, stored_embeddings, min_votes=2, callback=None):
         # verifikasi dari full frames (detect + embed per frame)
         # dipakai jika liveness dinonaktifkan (tidak ada cached crops)
-        use_best  = bool(getattr(config, "VERIFY_USE_BEST_SCORE", True))
-        thresh    = float(config.FACE_MATCH_THRESH)
-
         votes = 0
         scores = []
-        best_single = 0.0
         for f in frames:
             match, sc = self.verify(f, stored_embeddings)
             scores.append(sc)
-            if sc > best_single:
-                best_single = sc
-            if match:
-                votes += 1
-            if callback:
-                callback(float(sc))
-
-        # Adaptive min_votes: 30% of frames, at least 2
-        cfg_votes = getattr(config, "VERIFY_MIN_VOTES", None)
-        if cfg_votes is None:
-            eff_votes = max(2, int(len(frames) * 0.30))
-        else:
-            eff_votes = int(cfg_votes)
-
-        avg_score   = float(np.mean(scores)) if scores else 0.0
-        final_score = best_single if use_best else avg_score
-        matched     = votes >= eff_votes or (use_best and best_single >= thresh)
-        return matched, final_score
+            if match: votes += 1
+            if callback: callback(float(sc))
+        return votes >= min_votes, float(np.mean(scores)) if scores else 0.0
 
     def verify_crop(self, face_crop: np.ndarray,
                     stored_embeddings: list) -> Tuple[bool, float]:
@@ -332,33 +311,16 @@ class FaceEngine:
         # terima list pre-cropped faces → langsung ke mobilefacenet
         # eliminasi redundant blazeface inference di phase 2
         # ~10x lebih cepat dari verify_multi_frame karena skip detection
-        use_best  = bool(getattr(config, "VERIFY_USE_BEST_SCORE", True))
-        thresh    = float(config.FACE_MATCH_THRESH)
-
-        votes      = 0
-        scores     = []
-        best_single = 0.0
+        votes  = 0
+        scores = []
         for crop in face_crops:
             match, sc = self.verify_crop(crop, stored_embeddings)
             scores.append(sc)
-            if sc > best_single:
-                best_single = sc
             if match:
                 votes += 1
             if callback:
                 callback(float(sc))
-
-        # Adaptive min_votes: 30% of crops, at least 2
-        cfg_votes = getattr(config, "VERIFY_MIN_VOTES", None)
-        if cfg_votes is None:
-            eff_votes = max(2, int(len(face_crops) * 0.30))
-        else:
-            eff_votes = int(cfg_votes)
-
-        avg_score   = float(np.mean(scores)) if scores else 0.0
-        final_score = best_single if use_best else avg_score
-        matched     = votes >= eff_votes or (use_best and best_single >= thresh)
-        return matched, final_score
+        return votes >= min_votes, float(np.mean(scores)) if scores else 0.0
 
     @property
     def mode(self) -> str:
