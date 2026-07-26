@@ -36,8 +36,21 @@ DETECT_SIZE       = 128      # input BlazeFace
 FACENET_SIZE      = 112      # input MobileFaceNet
 TFLITE_THREADS    = 4        # jumlah thread TFLite (sesuai core Raspi)
 DETECT_CONFIDENCE = 0.6      # ambang deteksi wajah
-FACE_MATCH_THRESH = 0.55     # ambang cosine similarity (lebih tinggi = lebih ketat)
-ENROLL_FRAMES     = 5        # jumlah frame diambil saat pendaftaran
+FACE_MATCH_THRESH = 0.785     # ambang cosine similarity (lebih tinggi = lebih ketat)
+ENROLL_FRAMES     = 20       # jumlah frame diambil saat pendaftaran (lebih banyak = lebih robust)
+
+# ─── Enrollment Quality & Diversity ──────────────────────
+# Jumlah minimum embedding valid yang harus berhasil dikumpulkan.
+# Jika kurang dari ini, pendaftaran akan memperingatkan user.
+ENROLL_MIN_VALID      = 12   # minimal embedding berhasil (dari ENROLL_FRAMES)
+
+# Selang waktu antar tangkapan (detik). Makin lambat = makin beragam pose/ekspresi.
+ENROLL_CAPTURE_DELAY  = 0.5  # detik antar frame
+
+# Filter kualitas per-embedding: sebelum menyimpan, cek konsistensi internal.
+# Embedding diterima hanya jika cosine similarity ke rata-rata set >= nilai ini.
+# Set 0.0 untuk mematikan filter (simpan semua).
+ENROLL_QUALITY_FLOOR  = 0.0  # 0.0 = tidak difilter (aman untuk enrollment pertama)
 
 # ─── RFID MFRC522 ─────────────────────────────────────────
 SPI_BUS    = 0
@@ -81,7 +94,19 @@ LIVENESS_MIN_SCORE     = 0.60    # threshold skor blink final
 LIVENESS_MIN_VOTES     = 1       # cukup 1 vote LIVE
 LIVENESS_FACE_PAD      = 0.25    # padding crop wajah
 LIVENESS_EARLY_EXIT_DELAY = 1.0  # detik tambahan setelah blink terdeteksi lalu keluar
-LIVENESS_MAX_VERIFY_FRAMES = 10  # maks frame yg diproses untuk verifikasi wajah
+LIVENESS_MAX_VERIFY_FRAMES = 15  # maks frame yg diproses untuk verifikasi wajah
+
+# ─── Verification Voting Strategy ────────────────────────
+# Jumlah minimum frame yang harus match untuk dinyatakan GRANTED.
+# ADAPTIVE: jika None, dihitung otomatis = max(2, floor(total_crops * 0.30))
+# artinya cukup ~30% frame cocok → mengurangi pengaruh frame buruk (blur/gerak)
+VERIFY_MIN_VOTES      = None  # None = adaptive (recommended dengan threshold tinggi)
+
+# Toleransi skor: saat voting, frame dianggap "match" jika skor >= FACE_MATCH_THRESH.
+# Namun untuk menghitung skor RATA-RATA yang dilaporkan, semua frame dipakai.
+# Set True untuk menggunakan skor TERTINGGI (bukan rata-rata) sebagai keputusan akhir.
+# Berguna saat threshold tinggi dan enrollment mencakup banyak variasi pose.
+VERIFY_USE_BEST_SCORE = True  # True = ambil skor tertinggi dari semua crops
 
 # ── EAR (Eye Aspect Ratio) — METODE UTAMA ─────────────────
 # Digunakan jika MediaPipe terinstall (pip install mediapipe).

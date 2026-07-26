@@ -106,8 +106,12 @@ def menu_daftar_pengguna(db: Database, face_engine: FaceEngine):
         return
 
     # ── STEP 4: Capture wajah ─────────────────────────────
+    enroll_frames    = int(getattr(config, "ENROLL_FRAMES", 20))
+    enroll_min_valid = int(getattr(config, "ENROLL_MIN_VALID", 12))
+    capture_delay    = float(getattr(config, "ENROLL_CAPTURE_DELAY", 0.5))
+    quality_floor    = float(getattr(config, "ENROLL_QUALITY_FLOOR", 0.0))
+
     print(f"\n  [3/4] Pendaftaran Wajah")
-    print(f"        Akan diambil {config.ENROLL_FRAMES} foto wajah.")
     print(f"        Hadapkan wajah ke kamera, pencahayaan cukup.")
     input("        Tekan Enter saat siap ...")
 
@@ -125,9 +129,9 @@ def menu_daftar_pengguna(db: Database, face_engine: FaceEngine):
         return
 
     try:
-        print(f"\n  Mengambil foto wajah", end="", flush=True)
-        for i in range(config.ENROLL_FRAMES):
-            time.sleep(0.8)
+        print(f"\n  Mengambil foto wajah ", end="", flush=True)
+        for _ in range(enroll_frames):
+            time.sleep(capture_delay)
             frame = cam.read()
             if frame is None:
                 print("x", end="", flush=True)
@@ -138,9 +142,9 @@ def menu_daftar_pengguna(db: Database, face_engine: FaceEngine):
                 embeddings.append(emb.tolist())
                 print("✔", end="", flush=True)
             else:
-                print("○", end="", flush=True)   # wajah tidak terdeteksi di frame ini
+                print("○", end="", flush=True)
 
-        print(f"  ({len(embeddings)}/{config.ENROLL_FRAMES} frame berhasil)\n")
+        print(f"  ({len(embeddings)}/{enroll_frames} frame berhasil)\n")
 
     finally:
         cam.stop()
@@ -154,6 +158,26 @@ def menu_daftar_pengguna(db: Database, face_engine: FaceEngine):
             print(f"  ✔ Pengguna '{nama}' didaftarkan tanpa wajah.")
         input("  Tekan Enter untuk kembali ...")
         return
+
+    # -- Internal quality filter (hidden) ------------------
+    import numpy as _np
+    if quality_floor > 0.0 and len(embeddings) >= 3:
+        emb_arr  = _np.array(embeddings, dtype=_np.float32)
+        mean_emb = emb_arr.mean(axis=0)
+        norm_m   = mean_emb / (_np.linalg.norm(mean_emb) + 1e-9)
+        embeddings = [
+            e for e in embeddings
+            if float(_np.dot(_np.array(e, dtype=_np.float32), norm_m)) >= quality_floor
+        ]
+
+    if len(embeddings) < enroll_min_valid:
+        log.warning("Enrollment: hanya %d embedding valid (min=%d)", len(embeddings), enroll_min_valid)
+        print(f"  [!] Jumlah data wajah kurang memadai ({len(embeddings)} foto berhasil).")
+        print(f"      Coba lagi dengan pencahayaan lebih baik, atau lanjut simpan?")
+        if input("  Lanjut simpan? [y/N] : ").strip().lower() != 'y':
+            print("  Pendaftaran dibatalkan.")
+            input("  Tekan Enter untuk kembali ...")
+            return
 
     # ── STEP 5: Simpan ke DB ──────────────────────────────
     print(f"  [4/4] Menyimpan ke database ...")
@@ -192,9 +216,14 @@ def menu_update_wajah(db: Database, face_engine: FaceEngine):
         print(f"  [!] UID {uid_str} tidak terdaftar.")
         input("  Tekan Enter ..."); return
 
+    enroll_frames    = int(getattr(config, "ENROLL_FRAMES", 20))
+    enroll_min_valid = int(getattr(config, "ENROLL_MIN_VALID", 12))
+    capture_delay    = float(getattr(config, "ENROLL_CAPTURE_DELAY", 0.5))
+    quality_floor    = float(getattr(config, "ENROLL_QUALITY_FLOOR", 0.0))
+
     print(f"\n  Pengguna : {user['nama']} (ID={user['id']})")
     print(f"  Mode FR  : {face_engine.mode}")
-    input(f"  Akan mengambil {config.ENROLL_FRAMES} foto. Tekan Enter saat siap ...")
+    input(f"  Hadapkan wajah ke kamera. Tekan Enter saat siap ...")
 
     embeddings = []
     cam = CameraStream()
@@ -202,9 +231,9 @@ def menu_update_wajah(db: Database, face_engine: FaceEngine):
         print("  [!] Kamera error."); input("  Enter ..."); return
 
     try:
-        print(f"\n  Mengambil foto", end="", flush=True)
-        for _ in range(config.ENROLL_FRAMES):
-            time.sleep(0.8)
+        print(f"\n  Mengambil foto wajah ", end="", flush=True)
+        for _ in range(enroll_frames):
+            time.sleep(capture_delay)
             frame = cam.read()
             if frame is None:
                 print("x", end="", flush=True); continue
@@ -214,13 +243,30 @@ def menu_update_wajah(db: Database, face_engine: FaceEngine):
                 print("✔", end="", flush=True)
             else:
                 print("○", end="", flush=True)
-        print(f" ({len(embeddings)} berhasil)")
+        print(f"  ({len(embeddings)}/{enroll_frames} berhasil)")
     finally:
         cam.stop()
 
     if len(embeddings) == 0:
         print("  [!] Tidak ada wajah terdeteksi.")
         input("  Enter ..."); return
+
+    # -- Internal quality filter (hidden) ------------------
+    import numpy as _np
+    if quality_floor > 0.0 and len(embeddings) >= 3:
+        emb_arr  = _np.array(embeddings, dtype=_np.float32)
+        mean_emb = emb_arr.mean(axis=0)
+        norm_m   = mean_emb / (_np.linalg.norm(mean_emb) + 1e-9)
+        embeddings = [
+            e for e in embeddings
+            if float(_np.dot(_np.array(e, dtype=_np.float32), norm_m)) >= quality_floor
+        ]
+
+    if len(embeddings) < enroll_min_valid:
+        log.warning("Update wajah: hanya %d embedding valid (min=%d)", len(embeddings), enroll_min_valid)
+        print(f"  [!] Jumlah data wajah kurang memadai ({len(embeddings)} foto berhasil).")
+        if input("  Lanjut simpan? [y/N] : ").strip().lower() != 'y':
+            input("  Enter ..."); return
 
     db.update_embedding(uid_str, embeddings)
     print(f"\n  ✔ Wajah diupdate: {len(embeddings)} embedding tersimpan.")
