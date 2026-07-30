@@ -635,32 +635,133 @@ class LivenessDetector:
     def check_realtime(self,
                        cam,              # CameraStream instance
                        face_engine,      # FaceEngine instance
-                       duration: float = 3.0) -> LivenessResult:
+                       duration: float = 3.0,
+                       required_blinks: Optional[int] = None,
+                       blink_detector: Optional[BlinkDetector] = None) -> LivenessResult:
         """
-        Kumpulkan frame secara real-time selama `duration` detik,
-        deteksi wajah terbesar di setiap frame, lalu periksa liveness.
-        """
-        frames   = []
-        face_box = None
-        t0       = time.time()
+        Kumpulkan frame secara real-time selama `duration` detik dan proses
+        liveness secara STREAMING per-frame (bukan batch di akhir).
 
-        while time.time() - t0 < duration:
+        OPTIMASI:
+          - Deteksi wajah (face_engine) hanya SEKALI di awal untuk mendapat
+            face_box referensi — ini penyebab bottleneck utama (~400ms/frame).
+          - EAR (MediaPipe) diproses per-frame tanpa jeda buatan → ~10–15 FPS.
+          - Early-exit segera setelah target blink terpenuhi + early_exit_delay.
+          - Tidak ada time.sleep() di dalam loop utama.
+        """
+        if required_blinks is None:
+            required_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
+        early_exit_delay = float(getattr(config, "LIVENESS_EARLY_EXIT_DELAY", 1.0))
+
+        # ── Langkah 1: Deteksi wajah SEKALI untuk mendapat face_box ─────────
+        # Coba hingga 3 detik pertama atau frame pertama yang valid.
+        face_box       = None
+        t_detect_start = time.time()
+        _FACE_DETECT_TIMEOUT = 3.0
+
+        log.info("Liveness check_realtime: mencari wajah awal ...")
+        while face_box is None and (time.time() - t_detect_start) < _FACE_DETECT_TIMEOUT:
             frame = cam.read()
             if frame is None:
-                time.sleep(0.05)
+                time.sleep(0.02)  # tunggu frame kamera, minimal
                 continue
-
             box = face_engine.detect_largest(frame)
             if box is not None:
-                if face_box is None:
-                    face_box = box[:4]   # simpan box pertama sebagai referensi
-                frames.append(frame)
+                face_box = tuple(box[:4])   # (x1, y1, x2, y2)
+                log.info(f"Liveness: wajah terdeteksi di {face_box}")
 
-            time.sleep(0.1)   # ~10 fps collection
-
-        if not frames or face_box is None:
+        if face_box is None:
             return LivenessResult(False, 0.0, 0, 1,
-                                  {"note": "Tidak ada wajah terdeteksi selama observasi"})
+                                  {"note": "Tidak ada wajah terdeteksi (timeout deteksi awal)"})
 
-        log.info(f"Liveness: {len(frames)} frame dikumpulkan dalam {duration:.1f}s")
-        return self.check(frames, face_box)
+        # ── Langkah 2: Siapkan BlinkDetector (pakai pre-warmed jika ada) ────
+        if blink_detector is None:
+            blink_detector = self.create_blink_detector()
+        blink_detector.reset()
+
+        # ── Langkah 3: Loop streaming EAR per-frame — TANPA sleep buatan ────
+        # face_engine.detect_largest() TIDAK dipanggil lagi di sini.
+        # Crop wajah dilakukan di sini inline agar tidak perlu simpan semua frame.
+        frames_collected  = 0
+        t0                = time.time()
+        target_hit_at     = None   # timestamp saat blink target terpenuhi
+        pad               = float(getattr(config, "LIVENESS_FACE_PAD", 0.25))
+
+        log.info(f"Liveness: mulai streaming EAR (durasi maks {duration:.1f}s, "
+                 f"target {required_blinks} blink) ...")
+
+        while True:
+            elapsed = time.time() - t0
+
+            # Kondisi berhenti: durasi habis
+            if elapsed >= duration:
+                break
+
+            # Kondisi berhenti: early-exit setelah target tercapai + jeda
+            if target_hit_at is not None:
+                if (time.time() - target_hit_at) >= early_exit_delay:
+                    log.info("Liveness: early-exit — target blink terpenuhi")
+                    break
+
+            frame = cam.read()
+            if frame is None:
+                time.sleep(0.005)   # ~200 FPS max poll, hindari busy-wait penuh
+                continue
+
+            # Crop wajah inline (reuse face_box yang sudah dideteksi di awal)
+            crop = self._crop_face(frame, face_box, pad=pad)
+            if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 20:
+                continue
+
+            # Proses EAR — ini adalah operasi ringan (MediaPipe tracking mode)
+            blink_detector.update(crop)
+            frames_collected += 1
+
+            # Tandai waktu saat target blink pertama kali terpenuhi
+            if target_hit_at is None and blink_detector.blink_count >= required_blinks:
+                target_hit_at = time.time()
+                log.info(f"Liveness: blink ke-{blink_detector.blink_count} "
+                          f"terdeteksi di t={elapsed:.2f}s")
+
+        # ── Langkah 4: Scoring (sama dengan _blink_score, tanpa re-proses) ──
+        blinks   = blink_detector.blink_count
+        ear_vals = blink_detector.ear_history
+        avg_ear  = float(np.mean(ear_vals)) if ear_vals else -1.0
+
+        if frames_collected == 0:
+            score = 0.1
+        elif blinks >= required_blinks:
+            score = 1.0
+        else:
+            score = float(getattr(config, "LIVENESS_BLINK_NO_EVENT_SCORE", 0.45))
+
+        detail = {
+            "blinks":          blinks,
+            "required_blinks": required_blinks,
+            "valid_frames":    frames_collected,
+            "avg_ear":         round(avg_ear, 4),
+            "blink_score":     round(score, 3),
+            "blink_method":    blink_detector.mode,
+            "elapsed_s":       round(time.time() - t0, 2),
+        }
+
+        # ── Verifikasi kontur (reuse depth_history dari BlinkDetector) ───────
+        contour_ok = True
+        if (blink_detector.mode == "mediapipe"
+                and bool(getattr(config, "LIVENESS_CONTOUR_ENABLED", True))):
+            contour_ok = _contour_live(blink_detector.depth_history)
+
+        min_score = float(getattr(config, "LIVENESS_MIN_SCORE", BLINK_LIVE_THRESH))
+        votes     = 1 if score >= BLINK_LIVE_THRESH else 0
+        is_live   = (votes >= MIN_VOTES) and (score >= min_score) and contour_ok
+
+        log.info(f"Liveness check_realtime: live={is_live} score={score:.3f} "
+                 f"frames={frames_collected} {detail}")
+
+        return LivenessResult(
+            is_live=is_live,
+            score=round(score, 3),
+            votes=votes,
+            total=1,
+            detail=detail,
+        )
