@@ -105,6 +105,10 @@ LIVENESS_MAX_VERIFY_FRAMES = 10  # maks frame yg diproses untuk verifikasi wajah
 # Naikkan jika blink sulit terdeteksi.
 BLINK_EAR_THRESHOLD    = 0.21   # EAR di bawah ini = mata tertutup
 BLINK_EAR_CONSEC_FRAMES = 2     # min frame dengan EAR < threshold agar dihitung blink
+BLINK_EAR_OPEN_GAP     = 0.02  # hysteresis: open_threshold = BLINK_EAR_THRESHOLD + gap
+                                 # zona abu-abu [0.21–0.23] tidak ubah state → cegah noise
+BLINK_MIN_OPEN_FRAMES  = 3     # min frame TERBUKA berturut sebelum blink berikutnya dihitung
+                                 # mencegah 1 kedipan dihitung 2-3x akibat EAR bouncing
 
 # ── Blink count & scoring ─────────────────────────────────
 # PENTING: LIVENESS_BLINK_NO_EVENT_SCORE HARUS < LIVENESS_BLINK_SCORE_THRESH

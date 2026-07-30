@@ -205,10 +205,18 @@ class BlinkDetector:
         self._contour_enabled = bool(getattr(config, "LIVENESS_CONTOUR_ENABLED", True))
 
         # Baca parameter dari config
-        self._ear_thresh    = float(getattr(config, "BLINK_EAR_THRESHOLD", 0.20))
-        self._consec_frames = int(getattr(config, "BLINK_EAR_CONSEC_FRAMES", 2))
+        self._ear_thresh      = float(getattr(config, "BLINK_EAR_THRESHOLD", 0.21))
+        # Hysteresis: threshold untuk membuka mata sedikit lebih tinggi dari threshold
+        # menutup mata, mencegah noise EAR ber-osilasi di sekitar titik potong.
+        # Contoh: close_thresh=0.21, open_thresh=0.23 → butuh kenaikan 0.02 sebelum dianggap buka.
+        _ear_open_gap         = float(getattr(config, "BLINK_EAR_OPEN_GAP", 0.02))
+        self._ear_open_thresh = self._ear_thresh + _ear_open_gap
+        self._consec_frames   = int(getattr(config, "BLINK_EAR_CONSEC_FRAMES", 2))
         self._min_closed_frames = int(getattr(config, "LIVENESS_BLINK_MIN_CLOSED_FRAMES", self._consec_frames))
         self._max_closed_frames = int(getattr(config, "LIVENESS_BLINK_MAX_CLOSED_FRAMES", 10))
+        # Debounce: jumlah minimum frame TERBUKA berturut-turut sebelum blink berikutnya
+        # bisa dihitung. Mencegah 1 kedipan dihitung 2-3x akibat bouncing EAR.
+        self._min_open_frames = int(getattr(config, "BLINK_MIN_OPEN_FRAMES", 3))
 
         # ── Inisialisasi backend ─────────────────────────
         self._mode = "none"  # "mediapipe" | "haar" | "none"
@@ -319,23 +327,44 @@ class BlinkDetector:
                 return None
 
             self._ear_history.append(ear)
-            eye_closed = ear < self._ear_thresh
 
-            if eye_closed:
+            # ── Hysteresis EAR ───────────────────────────────────────
+            # Gunakan dua threshold berbeda untuk transisi tutup vs buka:
+            #   mata MENUTUP : EAR < ear_thresh       (misal < 0.21)
+            #   mata MEMBUKA : EAR > ear_open_thresh  (misal > 0.23)
+            # Zona abu-abu [0.21–0.23] tidak mengubah state → eliminasi
+            # false-positive akibat noise EAR bergetar di sekitar 0.21.
+            if ear < self._ear_thresh:
+                eye_signal = "closing"
+            elif ear > self._ear_open_thresh:
+                eye_signal = "opening"
+            else:
+                eye_signal = "neutral"  # zona abu-abu, pertahankan state lama
+
+            if eye_signal == "closing":
                 if self._state in ("open", "unknown"):
                     self._state = "closed"
                     self._closed_frames = 1
                 else:
                     self._closed_frames += 1
                 self._open_frames = 0
-            else:
+
+            elif eye_signal == "opening":
                 if self._state == "closed" and self._min_closed_frames <= self._closed_frames <= self._max_closed_frames:
-                    self._blinks += 1
-                    log.debug(f"Blink #{self._blinks} (EAR={ear:.3f}, "
-                              f"closed_frames={self._closed_frames})")
+                    # Debounce: hitung blink HANYA jika sudah cukup frame terbuka
+                    # sejak blink sebelumnya (hindari double-count 1 kedipan)
+                    if self._open_frames >= self._min_open_frames or self._blinks == 0:
+                        self._blinks += 1
+                        log.debug(f"Blink #{self._blinks} (EAR={ear:.3f}, "
+                                  f"closed={self._closed_frames}f, open_before={self._open_frames}f)")
                 self._state = "open"
                 self._closed_frames = 0
                 self._open_frames += 1
+
+            else:
+                # neutral zone: pertahankan state saat ini, tambah counter open jika sedang open
+                if self._state == "open":
+                    self._open_frames += 1
 
             # ── Debug: simpan frame jika diminta ────────
             if getattr(config, "DEBUG_EYE_TRACKER", False) and cv2 is not None:
