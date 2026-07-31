@@ -11,7 +11,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ─── Database ─────────────────────────────────────────────
 DB_PATH = os.path.join(BASE_DIR, "database", "akses.db")
-AES_KEY_HEX = "6fe627241f93987be6975820d45e2740"
+# AES key untuk enkripsi embedding — diambil dari env var jika ada,
+# fallback ke nilai default (GANTI di produksi via: export AES_KEY_HEX=...)
+AES_KEY_HEX = os.environ.get("AES_KEY_HEX", "6fe627241f93987be6975820d45e2740")
 
 # Path untuk BlazeFace (PyTorch)
 BLAZEFACE_DIR = os.path.join(BASE_DIR, "BlazeFace-PyTorch")
@@ -81,6 +83,26 @@ LCD_ROWS       = 2
 # ─── Log ──────────────────────────────────────────────────
 LOG_DIR  = os.path.join(BASE_DIR, "logs_data")
 LOG_FILE = os.path.join(LOG_DIR, "system.log")
+
+# ─── Keamanan Web ─────────────────────────────────────────
+# Token autentikasi untuk endpoint administratif (write).
+# Kirim via header: X-Access-Token: <token>
+# atau query param: ?token=<token>
+# Ganti nilai ini atau set env var ACCESS_TOKEN sebelum deploy.
+WEB_TOKEN = os.environ.get("ACCESS_TOKEN", "GANTI_TOKEN_INI_SEBELUM_DEPLOY")
+
+# HTTPS dengan sertifikat self-signed.
+# Generate cert: openssl req -x509 -newkey rsa:2048 -keyout certs/server.key
+#                  -out certs/server.crt -days 365 -nodes -subj "/CN=access-control"
+WEB_USE_SSL  = False   # set True setelah cert tersedia
+SSL_CERT_FILE = os.path.join(BASE_DIR, "certs", "server.crt")
+SSL_KEY_FILE  = os.path.join(BASE_DIR, "certs", "server.key")
+
+# Jika True, endpoint GET /stream dan GET / juga dilindungi HTTP Basic Auth.
+# Gunakan False untuk display HDMI lokal (kiosk mode) yang tidak perlu login.
+STREAM_AUTH_REQUIRED = False
+STREAM_AUTH_USER     = os.environ.get("STREAM_USER", "admin")
+STREAM_AUTH_PASS     = os.environ.get("STREAM_PASS", "GANTI_PASS_INI")
 
 # ─── Tampilan CLI ─────────────────────────────────────────
 APP_NAME    = "Sistem Kendali Akses"

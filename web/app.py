@@ -6,6 +6,9 @@ import json
 import threading
 import logging
 import traceback
+import base64
+import hmac
+from functools import wraps
 from flask import Flask, Response, jsonify, request
 import cv2
 
@@ -56,6 +59,75 @@ _rt_overlay = {
     "liveness_status" : "",
     "active"          : False,
 }
+
+# ── Autentikasi ──────────────────────────────────────────────────────────────
+
+def _check_token(req) -> bool:
+    """Validasi X-Access-Token header atau ?token= query param.
+    Menggunakan hmac.compare_digest untuk mencegah timing attack.
+    """
+    expected = getattr(config, 'WEB_TOKEN', '')
+    if not expected or expected == 'GANTI_TOKEN_INI_SEBELUM_DEPLOY':
+        # Token belum dikonfigurasi — log warning tapi izinkan (fail-open untuk dev).
+        log.warning("WEB_TOKEN belum dikonfigurasi! Set env var ACCESS_TOKEN.")
+        return True
+    candidate = (
+        req.headers.get("X-Access-Token")
+        or req.args.get("token")
+        or ""
+    )
+    return hmac.compare_digest(candidate, expected)
+
+
+def require_token(f):
+    """Decorator — proteksi endpoint administratif dengan API token.
+
+    Cara penggunaan:
+        curl -H "X-Access-Token: <token>" http://<ip>:5000/api/enroll
+        atau: fetch('/api/enroll', {headers: {'X-Access-Token': token}})
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not _check_token(request):
+            log.warning("Akses ditolak ke %s dari %s (token tidak valid)",
+                        request.path, request.remote_addr)
+            return jsonify({"error": "Unauthorized",
+                            "hint": "Sertakan header X-Access-Token yang valid"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+def _check_basic_auth(req) -> bool:
+    """Validasi HTTP Basic Auth untuk endpoint stream/display."""
+    auth = req.authorization
+    if not auth:
+        return False
+    user_ok = hmac.compare_digest(auth.username or "", getattr(config, 'STREAM_AUTH_USER', ''))
+    pass_ok = hmac.compare_digest(auth.password or "", getattr(config, 'STREAM_AUTH_PASS', ''))
+    return user_ok and pass_ok
+
+
+def _basic_auth_challenge():
+    """Kembalikan respons 401 dengan header WWW-Authenticate."""
+    return Response(
+        "Autentikasi diperlukan.", 401,
+        {"WWW-Authenticate": 'Basic realm="Access Control Monitor"'}
+    )
+
+
+def require_stream_auth(f):
+    """Decorator — proteksi /stream dan / dengan HTTP Basic Auth (opsional).
+    Aktifkan dengan STREAM_AUTH_REQUIRED = True di config.py.
+    """
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if getattr(config, 'STREAM_AUTH_REQUIRED', False):
+            if not _check_basic_auth(request):
+                return _basic_auth_challenge()
+        return f(*args, **kwargs)
+    return decorated
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 def update_state(step: str, step_code: str = "idle",
                  user_name: str = "", similarity=None,
@@ -149,7 +221,12 @@ def _mjpeg_generator():
         time.sleep(max(0, interval - elapsed))
 
 @app.route("/stream")
+@require_stream_auth
 def stream():
+    """MJPEG stream kamera.
+    Dilindungi HTTP Basic Auth jika STREAM_AUTH_REQUIRED=True di config.
+    Untuk display HDMI internal (kiosk mode), biarkan STREAM_AUTH_REQUIRED=False.
+    """
     return Response(
         _mjpeg_generator(),
         mimetype="multipart/x-mixed-replace; boundary=frame"
@@ -160,6 +237,8 @@ def stream():
 @app.route("/api/state", methods=["GET", "POST"])
 def api_state():
     if request.method == "POST":
+        if not _check_token(request):  # internal write — cek token
+            return jsonify({"error": "Unauthorized"}), 401
         data = request.json or {}
         kwargs = {}
         for key in ["step", "step_code", "user_name", "similarity", "message"]:
@@ -177,6 +256,8 @@ def api_state():
 @app.route("/api/rt-overlay", methods=["GET", "POST"])
 def api_rt_overlay():
     if request.method == "POST":
+        if not _check_token(request):  # internal write — cek token
+            return jsonify({"error": "Unauthorized"}), 401
         data = request.json or {}
         with _rt_lock:
             for k in ["similarity", "blinks", "liveness_status", "active"]:
@@ -206,9 +287,14 @@ def api_users():
     return jsonify([dict(u) for u in users])
 
 @app.route("/api/config")
+@require_token
 def api_config():
-    SENSITIVE = {"AES_KEY_HEX", "SECRET_KEY", "API_KEY", "DATABASE_URL"}
-    conf = {k: v for k, v in vars(config).items() if not k.startswith('__') and k not in SENSITIVE}
+    """Ekspos konfigurasi non-sensitif — dilindungi token."""
+    SENSITIVE = {"AES_KEY_HEX", "SECRET_KEY", "API_KEY", "DATABASE_URL",
+                 "WEB_TOKEN", "STREAM_AUTH_PASS", "STREAM_AUTH_USER"}
+    conf = {k: v for k, v in vars(config).items()
+            if not k.startswith('__') and k not in SENSITIVE
+            and not callable(v)}
     return jsonify(conf)
 
 @app.route("/api/system/info")
@@ -229,6 +315,7 @@ def api_task_status():
 # ── Write Endpoints ───────────────────────────────────────────────────────────
 
 @app.route("/api/users/<int:user_id>", methods=["PUT", "DELETE"])
+@require_token
 def api_manage_user(user_id):
     if not _db: return jsonify({"error": "DB not ready"}), 500
     if request.method == "DELETE":
@@ -265,11 +352,14 @@ def run_task(task_name, func, *args):
 # ── Action Endpoints ──────────────────────────────────────────────────────────
 
 @app.route("/api/liveness/toggle", methods=["POST"])
+@require_token
 def api_toggle_liveness():
     config.LIVENESS_ENABLED = not config.LIVENESS_ENABLED
+    log.info("Liveness toggled → %s oleh %s", config.LIVENESS_ENABLED, request.remote_addr)
     return jsonify({"liveness_enabled": config.LIVENESS_ENABLED})
 
 @app.route("/api/enroll", methods=["POST"])
+@require_token
 def api_enroll():
     data = request.json or {}
     nama = data.get("nama")
@@ -318,6 +408,7 @@ def api_enroll():
     return jsonify({"task_started": started, "message": msg})
 
 @app.route("/api/enroll/update-face", methods=["POST"])
+@require_token
 def api_update_face():
     def _update_face_task():
         update_state("Scan Kartu RFID untuk Update", "rfid")
@@ -357,6 +448,7 @@ def api_update_face():
     return jsonify({"task_started": started, "message": msg})
 
 @app.route("/api/liveness/test", methods=["POST"])
+@require_token
 def api_liveness_test():
     def _liveness_test_task():
         update_state("Uji Liveness", "liveness")
@@ -389,6 +481,7 @@ def api_liveness_test():
     return jsonify({"task_started": started, "message": msg})
 
 @app.route("/api/access/once", methods=["POST"])
+@require_token
 def api_access_once():
     def _access_once_task():
         from menus.access import _proses_akses
@@ -429,6 +522,7 @@ def api_access_once():
     return jsonify({"task_started": started, "message": msg})
 
 @app.route("/api/access/start", methods=["POST"])
+@require_token
 def api_access_start():
     def _access_loop():
         from menus.access import _proses_akses
@@ -477,6 +571,7 @@ def api_access_start():
     return jsonify({"task_started": started, "message": msg})
 
 @app.route("/api/access/stop", methods=["POST"])
+@require_token
 def api_access_stop():
     _stop_event.set()
     return jsonify({"status": "stopping"})
@@ -689,7 +784,11 @@ setTimeout(() => {
 
 @app.route("/")
 @app.route("/display")
+@require_stream_auth
 def display():
+    """Halaman monitoring utama — untuk display HDMI / browser.
+    Dilindungi HTTP Basic Auth jika STREAM_AUTH_REQUIRED=True di config.
+    """
     return _HTML
 
 def init_app(db, face_engine, door):
@@ -699,15 +798,55 @@ def init_app(db, face_engine, door):
     _door = door
 
 def run_web(db, face_engine, door, host=None, port=None):
+    """Jalankan Flask server di thread terpisah.
+
+    Jika WEB_USE_SSL=True di config, server berjalan dengan HTTPS menggunakan
+    sertifikat self-signed. Generate sertifikat terlebih dahulu:
+        mkdir -p certs
+        openssl req -x509 -newkey rsa:2048 -keyout certs/server.key \\
+          -out certs/server.crt -days 365 -nodes -subj "/CN=access-control"
+    """
     init_app(db, face_engine, door)
     h = host or getattr(config, 'WEB_HOST', '0.0.0.0')
     p = port or getattr(config, 'WEB_PORT', 5000)
+
+    # ── SSL context ──────────────────────────────────────────────────────────
+    ssl_ctx = None
+    if getattr(config, 'WEB_USE_SSL', False):
+        cert = getattr(config, 'SSL_CERT_FILE', '')
+        key  = getattr(config, 'SSL_KEY_FILE', '')
+        if os.path.exists(cert) and os.path.exists(key):
+            ssl_ctx = (cert, key)
+            log.info("SSL aktif — menggunakan sertifikat: %s", cert)
+        else:
+            log.error(
+                "WEB_USE_SSL=True tapi file sertifikat tidak ditemukan!\n"
+                "  cert : %s\n  key  : %s\n"
+                "Jalankan: openssl req -x509 -newkey rsa:2048 "
+                "-keyout certs/server.key -out certs/server.crt "
+                "-days 365 -nodes -subj '/CN=access-control'",
+                cert, key
+            )
+
+    # ── Log peringatan token ──────────────────────────────────────────────────
+    token = getattr(config, 'WEB_TOKEN', '')
+    if not token or token == 'GANTI_TOKEN_INI_SEBELUM_DEPLOY':
+        log.warning(
+            "[KEAMANAN] WEB_TOKEN belum diubah dari nilai default!\n"
+            "  Set env var: export ACCESS_TOKEN='token-rahasia-anda'\n"
+            "  atau ubah WEB_TOKEN di config.py sebelum deploy."
+        )
+
+    proto = "https" if ssl_ctx else "http"
     t = threading.Thread(
-        target=lambda: app.run(host=h, port=p, threaded=True,
-                               use_reloader=False, debug=False),
+        target=lambda: app.run(
+            host=h, port=p, threaded=True,
+            use_reloader=False, debug=False,
+            ssl_context=ssl_ctx
+        ),
         daemon=True,
         name="FlaskThread"
     )
     t.start()
-    log.info("Web display: http://%s:%d", h, p)
+    log.info("Web display: %s://%s:%d", proto, h, p)
     return t

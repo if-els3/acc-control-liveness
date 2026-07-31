@@ -48,3 +48,13 @@ logs_data/
 TA.zip
 *.pdf
 *.txt
+
+# SSL Certificates — JANGAN commit private key ke repository!
+certs/
+*.key
+*.crt
+*.pem
+
+# Database (data lokal, jangan commit)
+database/*.db
+*.db
