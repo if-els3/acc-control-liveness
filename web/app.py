@@ -60,6 +60,25 @@ _rt_overlay = {
     "active"          : False,
 }
 
+# ── Resource contention flag ─────────────────────────────────────────────────
+# Saat liveness sedang berjalan di thread utama, MediaPipe FaceMesh memakan
+# hampir seluruh CPU Raspi. Jika Flask stream thread ikut memanggil BlazeFace
+# detect_largest() bersamaan, FPS liveness drop dari ~15 ke 6-9 FPS.
+# Flag ini memberitahu _mjpeg_generator agar skip face detection
+# (hanya stream frame mentah) selama liveness berlangsung.
+_liveness_busy = False
+_liveness_busy_lock = threading.Lock()
+
+def set_liveness_busy(busy: bool):
+    """Dipanggil dari menus/access.py sebelum/sesudah sesi liveness."""
+    global _liveness_busy
+    with _liveness_busy_lock:
+        _liveness_busy = busy
+
+def is_liveness_busy() -> bool:
+    with _liveness_busy_lock:
+        return _liveness_busy
+
 # ── Autentikasi ──────────────────────────────────────────────────────────────
 
 def _check_token(req) -> bool:
@@ -177,8 +196,10 @@ def _mjpeg_generator():
             cv2.putText(frame, f"FPS: {int(fps_val)}", (frame.shape[1] - 70, 20), font, 0.5, (0, 255, 255), 1)
 
             # Draw face box if face engine available
+            # CATATAN: Skip face detection saat liveness sedang berjalan
+            # agar tidak berkompetisi CPU dengan MediaPipe FaceMesh.
             face_box_data = None
-            if _face_engine and _face_engine.is_loaded():
+            if _face_engine and _face_engine.is_loaded() and not is_liveness_busy():
                 box = _face_engine.detect_largest(frame)
                 if box:
                     x1, y1, x2, y2, score = [int(v) for v in box]
