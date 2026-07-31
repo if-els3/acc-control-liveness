@@ -443,6 +443,28 @@ class BlinkDetector:
         self._depth_history.clear()
         self._state = "unknown"
         self._closed_frames = 0
+        self._open_frames = 0
+
+    def flush_pending_blink(self) -> int:
+        """Hitung blink yang 'menggantung' (mata masih tertutup saat sesi habis).
+
+        Masalah: saat FPS rendah (6-9 FPS di Raspi), durasi setiap frame ~111-167ms.
+        Sebuah kedipan (100-400ms) bisa hanya terekam sebagai 1-2 frame "tutup"
+        tepat di akhir sesi — dan karena blink baru dihitung saat transisi tutup→buka,
+        fase "buka" tidak sempat terekam sebelum waktu habis.
+
+        Solusi: di akhir sesi, jika state masih "closed" dan closed_frames sudah
+        memenuhi syarat minimum, kita anggap blink itu valid dan hitung sekarang.
+
+        Returns:
+            Jumlah total blink setelah flush (termasuk yang pending).
+        """
+        if (self._state == "closed"
+                and self._min_closed_frames <= self._closed_frames <= self._max_closed_frames):
+            self._blinks += 1
+            log.debug(f"flush_pending_blink: +1 blink (closed_frames={self._closed_frames}) "
+                      f"→ total={self._blinks}")
+        return self._blinks
 
 
 # ══════════════════════════════════════════════════════════
@@ -472,7 +494,13 @@ def _blink_score(face_frames_bgr: List[np.ndarray],
         if result is not None:
             valid_frames += 1
 
-    blinks          = detector.blink_count
+    # ── Flush blink pending ─────────────────────────────────────────────────
+    # Jika FPS rendah (6–9 FPS di Raspi), satu kedipan bisa terpenggal:
+    # fase "tutup" terekam tapi fase "buka" tidak sempat masuk sebelum sesi
+    # habis. flush_pending_blink() menghitung blink yang masih "menggantung"
+    # (state=closed, closed_frames sudah memenuhi syarat min).
+    blinks = detector.flush_pending_blink()
+
     if required_blinks is None:
         required_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
     ear_vals        = detector.ear_history
