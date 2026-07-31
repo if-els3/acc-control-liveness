@@ -159,10 +159,23 @@ def _mjpeg_generator():
         _global_camera.start()
 
     font = cv2.FONT_HERSHEY_SIMPLEX
+    prev_time = time.time()
+    fps_val = 0.0
+    
     while True:
         t0    = time.time()
         frame = _global_camera.read()
         if frame is not None:
+            # Kalkulasi FPS stream
+            curr_time = time.time()
+            dt = curr_time - prev_time
+            if dt > 0:
+                fps_val = (0.9 * fps_val) + (0.1 * (1.0 / dt))
+            prev_time = curr_time
+            
+            # Tampilkan FPS di pojok kanan atas
+            cv2.putText(frame, f"FPS: {int(fps_val)}", (frame.shape[1] - 70, 20), font, 0.5, (0, 255, 255), 1)
+
             # Draw face box if face engine available
             face_box_data = None
             if _face_engine and _face_engine.is_loaded():
