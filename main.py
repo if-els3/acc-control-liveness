@@ -117,13 +117,20 @@ def main():
     
     try:
         from web.app import run_web
+        # Memastikan host diset ke 0.0.0.0 agar bisa diakses dari jaringan (misal PC: 192.168.137.xxx)
         host = getattr(config, 'WEB_HOST', '0.0.0.0')
         port = getattr(config, 'WEB_PORT', 5000)
+        
+        # 1. Cek apakah SSL aktif di config untuk menentukan http atau https
+        is_ssl = getattr(config, 'WEB_USE_SSL', False)
+        protocol = "https" if is_ssl else "http"
+
         run_web(db, face_engine, door, host=host, port=port)
         print(f"  [4/4] Web Interface ...OK")
         print(f"\n  🌐 Akses stream & status:")
-        print(f"     http://{host}:{port}/")
-        print(f"     http://{host}:{port}/display")
+        # 2. Gunakan variabel {protocol} untuk print di terminal
+        print(f"     {protocol}://{host}:{port}/")
+        print(f"     {protocol}://{host}:{port}/display")
         
         if "--prod" in sys.argv:
             try:
@@ -141,15 +148,15 @@ def main():
                         "--kiosk",
                         "--noerrdialogs",
                         "--disable-infobars",
-                        f"http://127.0.0.1:{port}/"
+                        "--ignore-certificate-errors", # 3. Abaikan error sertifikat self-signed
+                        f"{protocol}://127.0.0.1:{port}/" # 4. Gunakan protokol dinamis
                     ]
                     browser_name = "Chromium"
                 elif shutil.which("firefox"):
-                    # Firefox mendukung kiosk mode dengan argumen --kiosk
                     browser_cmd = [
                         "firefox",
                         "--kiosk",
-                        f"http://127.0.0.1:{port}/"
+                        f"{protocol}://127.0.0.1:{port}/" # 5. Gunakan protokol dinamis
                     ]
                     browser_name = "Firefox"
                 else:
