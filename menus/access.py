@@ -40,8 +40,12 @@ def _http_post_state(host, port, **kwargs):
     try:
         url = f"http://{host}:{port}/api/state"
         data = json.dumps(kwargs).encode()
+        token = getattr(config, 'WEB_TOKEN', '')
         req = urllib.request.Request(url, data=data,
-                                     headers={"Content-Type": "application/json"},
+                                     headers={
+                                         "Content-Type": "application/json",
+                                         "X-Access-Token": token,
+                                     },
                                      method="POST")
         urllib.request.urlopen(req, timeout=0.5)
     except Exception as e:
@@ -64,8 +68,12 @@ def _rt_overlay(host, port, **kwargs):
     try:
         url = f"http://{host}:{port}/api/rt-overlay"
         data = json.dumps(kwargs).encode()
+        token = getattr(config, 'WEB_TOKEN', '')
         req = urllib.request.Request(url, data=data,
-                                     headers={"Content-Type": "application/json"},
+                                     headers={
+                                         "Content-Type": "application/json",
+                                         "X-Access-Token": token,
+                                     },
                                      method="POST")
         urllib.request.urlopen(req, timeout=0.5)
     except Exception as e:

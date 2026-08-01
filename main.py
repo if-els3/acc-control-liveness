@@ -84,7 +84,7 @@ def cleanup(door):
  
 def tampilkan_menu(face_engine):
     lv = "\033[92mON\033[0m" if config.LIVENESS_ENABLED else "\033[93mOFF\033[0m"
-    fr = face_engine.mode if face_engine.is_loaded else "Tidak aktif"
+    fr = face_engine.mode if face_engine.is_loaded() else "Tidak aktif"
     print(f"\n{SEP2}")
     print(f"  {config.APP_NAME.upper()}")
     print(f"  v{config.APP_VERSION}  |  FR: {fr}  |  Liveness: {lv}")
