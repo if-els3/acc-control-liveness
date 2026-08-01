@@ -617,116 +617,166 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Access Control</title>
+<title>Access Control Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #000;
-    --glass-bg: rgba(15, 15, 15, 0.65);
-    --glass-border: rgba(255, 255, 255, 0.1);
+    --bg: #0a0e1a;
+    --surface: rgba(12, 18, 35, 0.82);
+    --surface-2: rgba(20, 28, 50, 0.9);
+    --border: rgba(99, 132, 255, 0.15);
+    --border-bright: rgba(99, 132, 255, 0.35);
+    --text: #e8eaf6;
+    --text-dim: rgba(232, 234, 246, 0.55);
     --green: #22c55e;
+    --green-glow: rgba(34, 197, 94, 0.35);
     --red: #ef4444;
-    --yellow: #eab308;
-    --text: #ffffff;
+    --red-glow: rgba(239, 68, 68, 0.35);
+    --yellow: #f59e0b;
+    --blue: #3b82f6;
+    --purple: #8b5cf6;
+    --accent: #6366f1;
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { 
-    background: var(--bg); color: var(--text); 
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    overflow: hidden; 
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    overflow: hidden;
     height: 100vh; width: 100vw;
+    -webkit-font-smoothing: antialiased;
   }
 
-  .cam-wrap { 
-    position: absolute;
-    top: 0; left: 0;
-    width: 100vw; height: 100vh;
-    z-index: 1;
+  /* ── Camera ── */
+  .cam-wrap {
+    position: absolute; top: 0; left: 0;
+    width: 100vw; height: 100vh; z-index: 1;
     background: #000;
   }
-  .cam-wrap img { 
-    width: 100%; height: 100%; 
+  .cam-wrap img {
+    width: 100%; height: 100%;
     object-fit: contain;
     object-position: center center;
   }
 
-  .overlay-container {
-    position: absolute;
-    bottom: 8%;
-    left: 50%;
-    transform: translateX(-50%) translateY(40px);
-    z-index: 10;
-    opacity: 0;
-    transition: all 0.7s cubic-bezier(0.16, 1, 0.3, 1);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
+  /* ── Top bar ── */
+  .top-bar {
+    position: absolute; top: 0; left: 0; right: 0;
+    z-index: 20;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 24px;
+    background: linear-gradient(to bottom, rgba(10,14,26,0.9) 0%, transparent 100%);
+  }
+  .top-bar-left { display: flex; align-items: center; gap: 10px; }
+  .live-dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 10px var(--green);
+    animation: pulse-dot 1.8s ease-in-out infinite;
+  }
+  @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(0.8)} }
+  .sys-name { font-size: 0.85rem; font-weight: 600; color: var(--text); letter-spacing: 0.8px; text-transform: uppercase; }
+  .top-bar-right { display: flex; align-items: center; gap: 14px; }
+  .liveness-badge {
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.6px;
+    padding: 4px 12px; border-radius: 20px;
+    background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.4);
+    color: var(--green); text-transform: uppercase;
+    transition: all 0.4s ease;
+  }
+  .liveness-badge.off {
+    background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.4); color: var(--red);
+  }
+  .clock { font-size: 0.82rem; font-weight: 500; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+  /* ── Bottom status card ── */
+  .status-card {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    z-index: 20;
+    display: flex; justify-content: center;
+    padding: 0 20px 28px;
     pointer-events: none;
-    will-change: transform, opacity;
+    transform: translateY(120%);
+    transition: transform 0.55s cubic-bezier(0.16, 1, 0.3, 1);
+    will-change: transform;
   }
-  .overlay-container.active {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
+  .status-card.active { transform: translateY(0); }
+
+  .glass-card {
+    background: var(--surface);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 20px 32px 22px;
+    min-width: min(460px, 90vw);
+    max-width: 600px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04);
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
   }
 
-  .glass-panel {
-    background: var(--glass-bg);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid var(--glass-border);
-    border-radius: 24px;
-    padding: 24px 48px;
-    text-align: center;
-    min-width: 320px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+  /* Step badge */
+  .step-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 20px; border-radius: 30px;
+    font-size: 0.78rem; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; transition: all 0.35s ease;
+    background: rgba(99,102,241,0.2); border: 1px solid rgba(99,102,241,0.4); color: #a5b4fc;
+  }
+  .step-badge.idle    { background: rgba(100,116,139,0.2); border-color: rgba(100,116,139,0.3); color: #94a3b8; }
+  .step-badge.rfid    { background: rgba(59,130,246,0.2); border-color: rgba(59,130,246,0.5); color: #93c5fd; }
+  .step-badge.verify  { background: rgba(139,92,246,0.2); border-color: rgba(139,92,246,0.5); color: #c4b5fd; }
+  .step-badge.liveness{ background: rgba(245,158,11,0.2); border-color: rgba(245,158,11,0.5); color: #fcd34d; }
+  .step-badge.granted { background: rgba(34,197,94,0.25); border-color: rgba(34,197,94,0.6); color: #86efac;
+    box-shadow: 0 0 20px rgba(34,197,94,0.25); }
+  .step-badge.denied  { background: rgba(239,68,68,0.2); border-color: rgba(239,68,68,0.5); color: #fca5a5; }
+
+  .badge-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+    opacity: 0.8;
+  }
+  .badge-dot.blink-anim { animation: pulse-dot 1s ease-in-out infinite; }
+
+  /* User name */
+  .user-name {
+    font-size: 1.6rem; font-weight: 800; color: var(--text);
+    letter-spacing: -0.3px; display: none;
+  }
+  .user-name.show { display: block; }
+
+  /* Step message */
+  .step-msg {
+    font-size: 0.9rem; color: var(--text-dim); font-weight: 400;
+    text-align: center; min-height: 1.2em;
+    transition: opacity 0.3s ease;
   }
 
-  #step-badge {
-    display: inline-block; padding: 8px 24px; border-radius: 30px;
-    font-size: 1.1rem; font-weight: 600; margin-bottom: 12px;
-    background: rgba(255, 255, 255, 0.15); color: #fff;
-    transition: background 0.4s ease, box-shadow 0.4s ease;
-    letter-spacing: 0.5px;
+  /* Similarity bar */
+  .sim-wrap {
+    width: 100%; display: none; flex-direction: column; gap: 5px;
   }
-  #step-badge.granted { background: rgba(34, 197, 94, 0.85); box-shadow: 0 4px 15px rgba(34, 197, 94, 0.3); }
-  #step-badge.denied  { background: rgba(239, 68, 68, 0.85); box-shadow: 0 4px 15px rgba(239, 68, 68, 0.3); }
-  #step-badge.liveness{ background: rgba(234, 179, 8, 0.85); color: #000; }
+  .sim-wrap.show { display: flex; }
+  .sim-label { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-dim); }
+  .sim-bar-bg {
+    width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 10px; overflow: hidden;
+  }
+  .sim-bar-fill {
+    height: 100%; border-radius: 10px; transition: width 0.5s ease, background 0.4s ease;
+    background: var(--green);
+  }
 
-  #step-text { font-size: 1.15rem; color: rgba(255,255,255,0.9); font-weight: 500; }
-  #user-name { font-size: 1.5rem; font-weight: 700; margin-top: 12px; }
+  /* Blink counter */
+  .blink-wrap {
+    display: none; align-items: center; gap: 8px;
+    font-size: 0.82rem; color: var(--yellow);
+  }
+  .blink-wrap.show { display: flex; }
+  .blink-icon { font-size: 1.1rem; animation: pulse-dot 1.2s ease-in-out infinite; }
 
-  .flawless-hover {
-    position: absolute;
-    top: 6%;
-    left: 50%;
-    transform: translateX(-50%) translateY(-20px);
-    background: rgba(20, 20, 20, 0.5);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(255,255,255,0.08);
-    padding: 10px 24px;
-    border-radius: 30px;
-    font-size: 0.9rem;
-    color: rgba(255,255,255,0.8);
-    z-index: 10;
-    opacity: 0;
-    transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
-    pointer-events: none;
-    display: flex;
-    align-items: center;
-    will-change: transform, opacity;
-  }
-  .flawless-hover.show {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-  }
-  .dot { 
-    display: inline-block; width: 8px; height: 8px; 
-    border-radius: 50%; background: var(--green); 
-    margin-right: 10px; box-shadow: 0 0 10px var(--green);
-    animation: pulse 2s infinite; 
-  }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-
+  /* Divider */
+  .divider { width: 100%; height: 1px; background: var(--border); }
 </style>
 </head>
 <body>
@@ -735,82 +785,156 @@ _HTML = r"""<!DOCTYPE html>
     <img id="stream" src="/stream" alt="Camera stream">
   </div>
 
-  <div class="overlay-container" id="overlay">
-    <div class="glass-panel">
-      <div id="step-badge" class="idle">Menunggu...</div>
-      <div id="step-text">Silakan Tap Kartu</div>
-      <div id="user-name" style="display:none"></div>
+  <!-- Top bar -->
+  <div class="top-bar">
+    <div class="top-bar-left">
+      <div class="live-dot"></div>
+      <span class="sys-name">Access Control</span>
+    </div>
+    <div class="top-bar-right">
+      <span class="liveness-badge" id="liveness-badge">Liveness: ON</span>
+      <span class="clock" id="clock">--:--:--</span>
     </div>
   </div>
 
-  <div class="flawless-hover" id="periodic-hover">
-    <span class="dot"></span>Sistem Aktif
+  <!-- Bottom status card -->
+  <div class="status-card" id="status-card">
+    <div class="glass-card">
+      <div class="step-badge idle" id="step-badge">
+        <span class="badge-dot" id="badge-dot"></span>
+        <span id="badge-text">Standby</span>
+      </div>
+
+      <div class="user-name" id="user-name"></div>
+
+      <div class="step-msg" id="step-msg">Silakan tap kartu RFID</div>
+
+      <div class="sim-wrap" id="sim-wrap">
+        <div class="divider"></div>
+        <div class="sim-label">
+          <span>Kecocokan Wajah</span>
+          <span id="sim-pct">0%</span>
+        </div>
+        <div class="sim-bar-bg">
+          <div class="sim-bar-fill" id="sim-bar" style="width:0%"></div>
+        </div>
+      </div>
+
+      <div class="blink-wrap" id="blink-wrap">
+        <div class="divider" style="margin-bottom:4px"></div>
+        <span class="blink-icon">👁</span>
+        <span id="blink-text">Kedipan: 0</span>
+      </div>
+    </div>
   </div>
 
 <script>
-const STEP_MAP = {
-  idle    : ["Standby", "idle"],
-  rfid    : ["Tap Kartu RFID", "idle"],
-  liveness: ["Liveness Check", "liveness"],
-  verify  : ["Verifikasi", "idle"],
-  granted : ["Akses Diberikan", "granted"],
-  denied  : ["Akses Ditolak", "denied"],
+const BADGE_CLASSES = ['idle','rfid','verify','liveness','granted','denied'];
+const BADGE_MAP = {
+  idle    : { text: 'Standby',          cls: 'idle',     msg: 'Silakan tap kartu RFID' },
+  rfid    : { text: 'Tap Kartu RFID',   cls: 'rfid',     msg: 'Tempelkan kartu ke reader...' },
+  verify  : { text: 'Verifikasi Wajah', cls: 'verify',   msg: 'Hadapkan wajah ke kamera' },
+  liveness: { text: 'Liveness Check',   cls: 'liveness', msg: 'Silakan berkedip sesuai instruksi' },
+  granted : { text: 'Akses Diberikan ✓',cls: 'granted',  msg: 'Selamat datang!' },
+  denied  : { text: 'Akses Ditolak ✗',  cls: 'denied',   msg: 'Identitas tidak dikenali' },
 };
 
-let hideTimeout;
-let lastStepCode = 'idle';
+let hideTimer = null;
+let lastCode = 'idle';
 
+// Clock
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('id-ID', { hour12: false });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// Liveness status
+async function refreshSystemInfo() {
+  try {
+    const info = await fetch('/api/system/info').then(r => r.json());
+    const badge = document.getElementById('liveness-badge');
+    if (info.liveness_enabled) {
+      badge.textContent = 'Liveness: ON';
+      badge.className = 'liveness-badge';
+    } else {
+      badge.textContent = 'Liveness: OFF';
+      badge.className = 'liveness-badge off';
+    }
+  } catch(e) {}
+}
+setInterval(refreshSystemInfo, 5000);
+refreshSystemInfo();
+
+// State polling
 async function refreshState() {
   try {
-    const s = await fetch("/api/state").then(r=>r.json());
-    const badge = document.getElementById("step-badge");
-    const overlay = document.getElementById("overlay");
-    const [label, cls] = STEP_MAP[s.step_code] || [s.step, "idle"];
-    
-    badge.textContent = label;
-    badge.className   = cls;
-    document.getElementById("step-text").textContent = s.step;
+    const s = await fetch('/api/state').then(r => r.json());
+    const code = s.step_code || 'idle';
+    const map  = BADGE_MAP[code] || { text: s.step, cls: 'idle', msg: '' };
 
-    const nameEl = document.getElementById("user-name");
+    // Badge
+    const badge = document.getElementById('step-badge');
+    const dot   = document.getElementById('badge-dot');
+    BADGE_CLASSES.forEach(c => badge.classList.remove(c));
+    badge.classList.add(map.cls);
+    document.getElementById('badge-text').textContent = map.text;
+    dot.className = 'badge-dot' + (code === 'liveness' ? ' blink-anim' : '');
+
+    // Message — prefer custom step text
+    const msg = s.step && !['Menunggu kartu RFID…','Menunggu...'].includes(s.step) ? s.step : map.msg;
+    document.getElementById('step-msg').textContent = msg;
+
+    // User name
+    const nameEl = document.getElementById('user-name');
     if (s.user_name) {
       nameEl.textContent = s.user_name;
-      nameEl.style.display = "block";
+      nameEl.classList.add('show');
     } else {
-      nameEl.style.display = "none";
+      nameEl.classList.remove('show');
     }
 
-    if (s.step_code === 'idle') {
-      if (lastStepCode !== 'idle') {
-        clearTimeout(hideTimeout);
-        hideTimeout = setTimeout(() => {
-          overlay.classList.remove('active');
-        }, 4000); 
+    // Similarity bar
+    const simWrap = document.getElementById('sim-wrap');
+    if (s.similarity !== null && s.similarity !== undefined) {
+      const pct = Math.round(s.similarity * 100);
+      simWrap.classList.add('show');
+      document.getElementById('sim-pct').textContent = pct + '%';
+      const bar = document.getElementById('sim-bar');
+      bar.style.width = pct + '%';
+      bar.style.background = pct >= 78 ? '#22c55e' : pct >= 55 ? '#f59e0b' : '#ef4444';
+    } else {
+      simWrap.classList.remove('show');
+    }
+
+    // Blink counter
+    const blinkWrap = document.getElementById('blink-wrap');
+    if (code === 'liveness' && s.blinks !== undefined) {
+      blinkWrap.classList.add('show');
+      document.getElementById('blink-text').textContent = 'Kedipan: ' + s.blinks;
+    } else {
+      blinkWrap.classList.remove('show');
+    }
+
+    // Show/hide card
+    const card = document.getElementById('status-card');
+    if (code === 'idle') {
+      if (lastCode !== 'idle') {
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => card.classList.remove('active'), 4000);
       }
     } else {
-      clearTimeout(hideTimeout);
-      overlay.classList.add('active');
+      clearTimeout(hideTimer);
+      card.classList.add('active');
     }
-    
-    lastStepCode = s.step_code;
+    lastCode = code;
   } catch(e) {}
 }
 
-function showFlawlessHover() {
-  const hoverEl = document.getElementById("periodic-hover");
-  hoverEl.classList.add("show");
-  setTimeout(() => {
-    hoverEl.classList.remove("show");
-  }, 5000);
-}
-
 setInterval(refreshState, 600);
-setInterval(showFlawlessHover, 600000); 
-
-setTimeout(() => {
-  refreshState();
-  showFlawlessHover();
-}, 500);
-
+refreshState();
 </script>
 </body>
 </html>"""

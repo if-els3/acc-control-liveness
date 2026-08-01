@@ -5,10 +5,14 @@ main.py — Sistem Kendali Akses RFID + Liveness + Face
 =============================================================
 Raspberry Pi | MFRC522 via SPI | Kamera USB | Servo | LCD
  
-Jalankan: python3 main.py
+Jalankan:
+  python3 main.py            # mode normal
+  python3 main.py --prod     # kiosk mode (buka browser otomatis)
+  python3 main.py --perf     # jalankan pengujian performa setelah selesai
+  python3 main.py --perf --perf-frames 30 --perf-duration 20
 =============================================================
 """
-import os, sys, logging, signal
+import os, sys, logging, signal, argparse
 import config
  
 os.makedirs(config.LOG_DIR, exist_ok=True)
@@ -112,6 +116,18 @@ def tampilkan_menu(face_engine):
  
  
 def main():
+    # ── Parse argumen CLI ──────────────────────────────────
+    parser = argparse.ArgumentParser(description="Sistem Kendali Akses")
+    parser.add_argument("--prod", action="store_true",
+                        help="Mode kiosk: buka browser otomatis")
+    parser.add_argument("--perf", action="store_true",
+                        help="Jalankan pengujian performa setelah sistem selesai")
+    parser.add_argument("--perf-frames", type=int, default=20,
+                        help="Jumlah frame untuk uji BlazeFace/Liveness/FaceNet (default: 20)")
+    parser.add_argument("--perf-duration", type=int, default=10,
+                        help="Durasi pipeline profiling dalam detik (default: 10)")
+    args, _unknown = parser.parse_known_args()
+
     db, face_engine, door = init_system()
     browser_process = None
     
@@ -132,7 +148,7 @@ def main():
         print(f"     {protocol}://{host}:{port}/")
         print(f"     {protocol}://{host}:{port}/display")
         
-        if "--prod" in sys.argv:
+        if args.prod:
             try:
                 import subprocess
                 import os
@@ -172,6 +188,10 @@ def main():
                 print(f"  [5/5] Membuka Kiosk Browser ... Gagal ({e})")
         else:
             print("  [5/5] Mode Standar (Akses web dari perangkat lain, tanpa membuka browser lokal)")
+            
+        if args.perf:
+            print(f"  [INFO] Flag --perf aktif — pengujian performa akan dijalankan setelah sistem selesai.")
+            print(f"         Frames: {args.perf_frames}  |  Durasi profiling: {args.perf_duration}s")
             
     except Exception as e:
         log.error(f"Gagal memulai web interface: {e}")
@@ -238,6 +258,20 @@ def main():
             atexit.unregister(emergency_lock)
         except Exception:
             pass
+
+        # ── Perf mode: jalankan pengujian setelah sistem normal selesai ──
+        if args.perf:
+            print(f"\n{SEP2}")
+            print("  Memulai PERF MODE ...")
+            print(SEP2)
+            try:
+                from perf.runner import run_perf
+                run_perf(
+                    n_frames=args.perf_frames,
+                    duration_seconds=args.perf_duration,
+                )
+            except Exception as e:
+                log.error(f"Perf mode error: {e}")
             
         print("  Sampai jumpa!")
         print(SEP2)

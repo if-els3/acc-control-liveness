@@ -89,20 +89,20 @@ LOG_FILE = os.path.join(LOG_DIR, "system.log")
 # Kirim via header: X-Access-Token: <token>
 # atau query param: ?token=<token>
 # Ganti nilai ini atau set env var ACCESS_TOKEN sebelum deploy.
-WEB_TOKEN = os.environ.get("ACCESS_TOKEN", "GANTI_TOKEN_INI_SEBELUM_DEPLOY")
+WEB_TOKEN = os.environ.get("ACCESS_TOKEN", "coba123456789")
 
 # HTTPS dengan sertifikat self-signed.
 # Generate cert: openssl req -x509 -newkey rsa:2048 -keyout certs/server.key
 #                  -out certs/server.crt -days 365 -nodes -subj "/CN=access-control"
-WEB_USE_SSL  = False   # set True setelah cert tersedia
+WEB_USE_SSL  = True   # set True setelah cert tersedia
 SSL_CERT_FILE = os.path.join(BASE_DIR, "certs", "server.crt")
 SSL_KEY_FILE  = os.path.join(BASE_DIR, "certs", "server.key")
 
 # Jika True, endpoint GET /stream dan GET / juga dilindungi HTTP Basic Auth.
 # Gunakan False untuk display HDMI lokal (kiosk mode) yang tidak perlu login.
-STREAM_AUTH_REQUIRED = False
+STREAM_AUTH_REQUIRED = True
 STREAM_AUTH_USER     = os.environ.get("STREAM_USER", "admin")
-STREAM_AUTH_PASS     = os.environ.get("STREAM_PASS", "GANTI_PASS_INI")
+STREAM_AUTH_PASS     = os.environ.get("STREAM_PASS", "admin")
 
 # ─── Tampilan CLI ─────────────────────────────────────────
 APP_NAME    = "Sistem Kendali Akses"
