@@ -111,9 +111,7 @@ APP_VERSION = "1.0.0"
 # ─── Liveness Detection ───────────────────────────────────
 LIVENESS_ENABLED       = True    # False = skip liveness, RFID+face saja
 DEBUG_EYE_TRACKER      = False   # False = production (tidak simpan debug_eye.jpg)
-LIVENESS_DURATION      = 5.0     # detik maks pengambilan frame
-                                  # DINAIKKAN dari 4.0 → 5.0 untuk memberi lebih banyak
-                                  # waktu di FPS rendah (~6-9 FPS = ~30-45 frame di 5 detik)
+LIVENESS_DURATION      = 4.0     # detik maks pengambilan frame (dikurangi dari 5.0)
 LIVENESS_MIN_SCORE     = 0.60    # threshold skor blink final
 LIVENESS_MIN_VOTES     = 1       # cukup 1 vote LIVE
 LIVENESS_FACE_PAD      = 0.25    # padding crop wajah
@@ -128,21 +126,17 @@ LIVENESS_MAX_VERIFY_FRAMES = 10  # maks frame yg diproses untuk verifikasi wajah
 # Turunkan BLINK_EAR_THRESHOLD jika terlalu banyak false-positive.
 # Naikkan jika blink sulit terdeteksi.
 BLINK_EAR_THRESHOLD    = 0.21   # EAR di bawah ini = mata tertutup
-BLINK_EAR_CONSEC_FRAMES = 1    # min frame dengan EAR < threshold agar dihitung "tutup"
-                                 # DITURUNKAN dari 2 → 1 karena FPS Raspi saat beban ~6-9 FPS
-                                 # (tiap frame ~130ms, blink natural ~100-400ms → sering hanya 1 frame)
+BLINK_EAR_CONSEC_FRAMES = 2     # min frame dengan EAR < threshold agar dihitung blink
 BLINK_EAR_OPEN_GAP     = 0.02  # hysteresis: open_threshold = BLINK_EAR_THRESHOLD + gap
                                  # zona abu-abu [0.21–0.23] tidak ubah state → cegah noise
-BLINK_MIN_OPEN_FRAMES  = 2     # min frame TERBUKA berturut sebelum blink berikutnya dihitung
-                                 # DITURUNKAN dari 3 → 2 untuk mengurangi dead zone antar blink di FPS rendah
+BLINK_MIN_OPEN_FRAMES  = 3     # min frame TERBUKA berturut sebelum blink berikutnya dihitung
+                                 # mencegah 1 kedipan dihitung 2-3x akibat EAR bouncing
 
 # ── Blink count & scoring ─────────────────────────────────
 # PENTING: LIVENESS_BLINK_NO_EVENT_SCORE HARUS < LIVENESS_BLINK_SCORE_THRESH
 # agar wajah diam / foto tidak otomatis lulus.
 LIVENESS_BLINK_MIN_COUNT      = 1     # minimal blink event untuk challenge sesi
-LIVENESS_BLINK_MAX_COUNT      = 1     # challenge blink = selalu 1 (tidak random 1-2)
-                                       # DITURUNKAN dari 2 → 1 karena FPS ~6-9 membuat
-                                       # 2 blink dalam 4 detik sering tidak terkejar
+LIVENESS_BLINK_MAX_COUNT      = 2     # challenge blink sesi dipilih acak dalam rentang ini
 LIVENESS_BLINK_SCORE_THRESH   = 0.60  # threshold voting blink
 LIVENESS_BLINK_NO_EVENT_SCORE = 0.45  # score fallback jika 0 blink — HARUS < 0.60
 LIVENESS_BLINK_MIN_CLOSED_FRAMES = 2  # (Haar fallback) min frame tertutup

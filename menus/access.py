@@ -12,13 +12,6 @@ from core.face_engine   import FaceEngine
 from core.liveness      import LivenessDetector, BlinkDetector
 from core.servo         import DoorController
 
-# Import set_liveness_busy untuk memberi tahu Flask stream agar
-# pause face detection selama liveness berjalan (hemat CPU Raspi)
-try:
-    from web.app import set_liveness_busy as _set_liveness_busy
-except ImportError:
-    def _set_liveness_busy(busy: bool): pass  # no-op jika web tidak aktif
-
 try:
     import urllib.request
     _HTTP_OK = True
@@ -40,12 +33,8 @@ def _http_post_state(host, port, **kwargs):
     try:
         url = f"http://{host}:{port}/api/state"
         data = json.dumps(kwargs).encode()
-        token = getattr(config, 'WEB_TOKEN', '')
         req = urllib.request.Request(url, data=data,
-                                     headers={
-                                         "Content-Type": "application/json",
-                                         "X-Access-Token": token,
-                                     },
+                                     headers={"Content-Type": "application/json"},
                                      method="POST")
         urllib.request.urlopen(req, timeout=0.5)
     except Exception as e:
@@ -68,12 +57,8 @@ def _rt_overlay(host, port, **kwargs):
     try:
         url = f"http://{host}:{port}/api/rt-overlay"
         data = json.dumps(kwargs).encode()
-        token = getattr(config, 'WEB_TOKEN', '')
         req = urllib.request.Request(url, data=data,
-                                     headers={
-                                         "Content-Type": "application/json",
-                                         "X-Access-Token": token,
-                                     },
+                                     headers={"Content-Type": "application/json"},
                                      method="POST")
         urllib.request.urlopen(req, timeout=0.5)
     except Exception as e:
@@ -190,77 +175,69 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
         force_redetect = False
         max_verify_frames = int(getattr(config, "LIVENESS_MAX_VERIFY_FRAMES", 10))
 
-        # Beri tahu Flask stream untuk pause face detection selama liveness
-        # agar tidak berkompetisi CPU dengan MediaPipe FaceMesh
-        _set_liveness_busy(True)
         t0 = time.time()
-        try:
-            while time.time() - t0 < config.LIVENESS_DURATION:
-                frame = cam.read()
-                if frame is None:
+        while time.time() - t0 < config.LIVENESS_DURATION:
+            frame = cam.read()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+
+            #-----DETEKSI WAJAH (LAZY)-----
+            if face_box is None or force_redetect:
+                # pertama kali atau mediapipe gagal → jalankan blazeface
+                box = face_engine.detect_largest(frame)
+                force_redetect = False
+                if box is None:
                     time.sleep(0.05)
                     continue
+                face_box = box[:4]
+                if t_face_detect is None:
+                    t_face_detect = time.perf_counter()
+                log.debug(f"BlazeFace detect: box={face_box}")
+            # else: reuse face_box dari iterasi sebelumnya → skip blazeface
 
-                #-----DETEKSI WAJAH (LAZY)-----
-                if face_box is None or force_redetect:
-                    # pertama kali atau mediapipe gagal → jalankan blazeface
-                    box = face_engine.detect_largest(frame)
-                    force_redetect = False
-                    if box is None:
-                        time.sleep(0.05)
-                        continue
-                    face_box = box[:4]
-                    if t_face_detect is None:
-                        t_face_detect = time.perf_counter()
-                    log.debug(f"BlazeFace detect: box={face_box}")
-                # else: reuse face_box dari iterasi sebelumnya → skip blazeface
+            liveness_frames.append(frame)
 
-                liveness_frames.append(frame)
+            crop = liveness._crop_face(frame, face_box)
+            if crop.size > 0 and crop.shape[0] > 20 and crop.shape[1] > 20:
+                # feed ke mediapipe blink detector
+                ear_result = blink_detector.update(crop)
 
-                crop = liveness._crop_face(frame, face_box)
-                if crop.size > 0 and crop.shape[0] > 20 and crop.shape[1] > 20:
-                    # feed ke mediapipe blink detector
-                    ear_result = blink_detector.update(crop)
+                # jika mediapipe return None = landmark tidak ditemukan di crop
+                # artinya orang mungkin geser/miring → force redetect frame berikutnya
+                if ear_result is None and blink_detector.mode == "mediapipe":
+                    force_redetect = True
+                    log.debug("MediaPipe landmark gagal → force redetect next frame")
 
-                    # jika mediapipe return None = landmark tidak ditemukan di crop
-                    # artinya orang mungkin geser/miring → force redetect frame berikutnya
-                    if ear_result is None and blink_detector.mode == "mediapipe":
-                        force_redetect = True
-                        log.debug("MediaPipe landmark gagal → force redetect next frame")
+                live_blinks = blink_detector.blink_count
 
-                    live_blinks = blink_detector.blink_count
+                # cache crop untuk verifikasi wajah phase 2 (skip re-detect nanti)
+                if len(face_crops_cached) < max_verify_frames:
+                    face_crops_cached.append(crop.copy())
 
-                    # cache crop untuk verifikasi wajah phase 2 (skip re-detect nanti)
-                    if len(face_crops_cached) < max_verify_frames:
-                        face_crops_cached.append(crop.copy())
-
-                    if state_callback:
-                        state_callback(
-                            step=f"Silakan BERKEDIP {required_blinks}x",
-                            step_code="liveness",
-                            user_name=nama,
-                            similarity=None,
+                if state_callback:
+                    state_callback(
+                        step=f"Silakan BERKEDIP {required_blinks}x",
+                        step_code="liveness",
+                        user_name=nama,
+                        similarity=None,
+                        blinks=live_blinks,
+                        liveness_status="Mengecek...",
+                        message=f"Kedipan terdeteksi: {live_blinks}"
+                    )
+                _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
+                            getattr(config, 'WEB_PORT', 5000),
                             blinks=live_blinks,
-                            liveness_status="Mengecek...",
-                            message=f"Kedipan terdeteksi: {live_blinks}"
+                            liveness_status="Cek..."
                         )
-                    _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
-                                getattr(config, 'WEB_PORT', 5000),
-                                blinks=live_blinks,
-                                liveness_status="Cek..."
-                            )
-                    if live_blinks >= required_blinks:
-                        if _blink_achieved_at is None:
-                            _blink_achieved_at = time.time()
-                            log.debug(f"Blink terpenuhi ({live_blinks}/{required_blinks}), tunggu {early_exit_delay}s")
-                        elif time.time() - _blink_achieved_at >= early_exit_delay:
-                            log.debug("Early-exit liveness setelah blink terdeteksi")
-                            break
-                time.sleep(0.08)
-
-        # Sesi liveness selesai — lepas flag CPU (selalu, meski exception)
-        finally:
-            _set_liveness_busy(False)
+                if live_blinks >= required_blinks:
+                    if _blink_achieved_at is None:
+                        _blink_achieved_at = time.time()
+                        log.debug(f"Blink terpenuhi ({live_blinks}/{required_blinks}), tunggu {early_exit_delay}s")
+                    elif time.time() - _blink_achieved_at >= early_exit_delay:
+                        log.debug("Early-exit liveness setelah blink terdeteksi")
+                        break
+            time.sleep(0.08)
 
         if not liveness_frames or face_box is None:
             _fail("GAGAL — Wajah hilang saat deteksi liveness")
