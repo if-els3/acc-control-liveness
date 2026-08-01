@@ -121,12 +121,17 @@ def main():
     parser.add_argument("--prod", action="store_true",
                         help="Mode kiosk: buka browser otomatis")
     parser.add_argument("--perf", action="store_true",
-                        help="Jalankan pengujian performa setelah sistem selesai")
-    parser.add_argument("--perf-frames", type=int, default=20,
-                        help="Jumlah frame untuk uji BlazeFace/Liveness/FaceNet (default: 20)")
-    parser.add_argument("--perf-duration", type=int, default=10,
-                        help="Durasi pipeline profiling dalam detik (default: 10)")
+                        help="Rekam data tiap percobaan autentikasi, buat laporan saat sistem ditutup")
     args, _unknown = parser.parse_known_args()
+
+    # ── Inisialisasi PerfCollector jika --perf aktif ────────────────
+    _perf_collector = None
+    if args.perf:
+        try:
+            from perf.runner import init_collector
+            _perf_collector = init_collector()
+        except Exception as e:
+            log.warning(f"PerfCollector init gagal: {e}")
 
     db, face_engine, door = init_system()
     browser_process = None
@@ -190,8 +195,9 @@ def main():
             print("  [5/5] Mode Standar (Akses web dari perangkat lain, tanpa membuka browser lokal)")
             
         if args.perf:
-            print(f"  [INFO] Flag --perf aktif — pengujian performa akan dijalankan setelah sistem selesai.")
-            print(f"         Frames: {args.perf_frames}  |  Durasi profiling: {args.perf_duration}s")
+            print(f"  [INFO] Mode Pengujian (--perf) AKTIF")
+            print(f"         Setiap percobaan autentikasi akan dicatat.")
+            print(f"         Laporan akan dibuat otomatis saat sistem ditutup.")
             
     except Exception as e:
         log.error(f"Gagal memulai web interface: {e}")
@@ -259,20 +265,13 @@ def main():
         except Exception:
             pass
 
-        # ── Perf mode: jalankan pengujian setelah sistem normal selesai ──
-        if args.perf:
-            print(f"\n{SEP2}")
-            print("  Memulai PERF MODE ...")
-            print(SEP2)
+        # ── Perf mode: buat laporan dari data yang sudah dikumpulkan ──
+        if args.perf and _perf_collector is not None:
             try:
-                from perf.runner import run_perf
-                run_perf(
-                    n_frames=args.perf_frames,
-                    duration_seconds=args.perf_duration,
-                )
+                _perf_collector.generate_report()
             except Exception as e:
-                log.error(f"Perf mode error: {e}")
-            
+                log.error(f"generate_report error: {e}")
+
         print("  Sampai jumpa!")
         print(SEP2)
  

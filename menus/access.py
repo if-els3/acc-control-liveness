@@ -2,6 +2,7 @@
 # alur: rfid → db → liveness (lazy detect + blink) → verify wajah (cached crops)
 
 import time, os, sys, logging, json, random
+import numpy as np
 log = logging.getLogger(__name__)
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
@@ -74,8 +75,60 @@ def _banner(mode=""):
 
 def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=None):
     # proses satu siklus akses. return status string
-    t_rfid = time.perf_counter()
-    t_face_detect = None
+    t_rfid_start    = time.perf_counter()
+    t_rfid          = time.perf_counter()  # alias lama (dipakai _report_timing)
+    t_face_detect   = None
+    t_liveness_start = None
+    t_verify_start  = None
+
+    # ── PerfCollector hook ─────────────────────────────────────────────────
+    try:
+        from perf.runner import get_collector
+        _perf = get_collector()
+    except Exception:
+        _perf = None
+
+    # EAR stats dikumpulkan dari blink_detector nanti
+    _ear_vals: list = []
+
+    def _get_ear_stats():
+        if not _ear_vals:
+            return 0.0, 0.0, 0.0
+        return round(float(np.min(_ear_vals)), 4), \
+               round(float(np.max(_ear_vals)), 4), \
+               round(float(np.mean(_ear_vals)), 4)
+
+    def _record(status, nama_arg="", similarity=0.0, match=False,
+                lv_required=0, lv_detected=0, lv_result="", lv_score=0.0):
+        """Kirim satu record ke PerfCollector jika aktif."""
+        if _perf is None:
+            return
+        now = time.perf_counter()
+        t_rfid_dur   = (t_liveness_start or t_verify_start or now) - t_rfid_start
+        t_face_dur   = max(0.0, (t_liveness_start - t_face_detect)
+                          if (t_liveness_start and t_face_detect) else 0.0)
+        t_live_dur   = max(0.0, (t_verify_start - t_liveness_start)
+                          if (t_verify_start and t_liveness_start) else 0.0)
+        t_ver_dur    = max(0.0, now - t_verify_start if t_verify_start else 0.0)
+        e_min, e_max, e_avg = _get_ear_stats()
+        _perf.record_attempt(
+            uid           = uid_str,
+            nama          = nama_arg,
+            status        = status,
+            t_rfid        = round(t_rfid_dur, 3),
+            t_face_detect = round(t_face_dur, 3),
+            t_liveness    = round(t_live_dur, 3),
+            t_verify      = round(t_ver_dur, 3),
+            liveness_required = lv_required,
+            liveness_detected = lv_detected,
+            liveness_result   = lv_result,
+            liveness_score    = lv_score,
+            face_similarity   = similarity,
+            face_match        = match,
+            face_threshold    = config.FACE_MATCH_THRESH,
+            ear_min = e_min, ear_max = e_max, ear_avg = e_avg,
+        )
+    # ── End PerfCollector hook ─────────────────────────────────────────────
 
     def _report_timing(waktu2_override=None):
         waktu1 = time.perf_counter() - t_rfid
@@ -93,6 +146,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     if user is None:
         _fail(f"DITOLAK — Kartu tidak terdaftar ({uid_str})")
         db.catat_log(uid_str, "DENIED_RFID", "UID tidak ada di database")
+        _record("DENIED_RFID", nama_arg=uid_str)
         return "DENIED_RFID"
 
     nama = user['nama']
@@ -115,6 +169,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                      user_id=user['id'], nama=nama)
         door.open(duration=config.DOOR_OPEN_SEC)
         waktu1, waktu2 = _report_timing()
+        _record("GRANTED", nama_arg=nama)
         if state_callback:
             state_callback(
                 step="Akses Diberikan (RFID only)",
@@ -135,9 +190,10 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     face_crops_cached = []  # crop wajah di-cache untuk phase 2 (skip re-detect)
     face_box      = None
     lv_status     = ""
-    liveness_score = None
+    liveness_score = 0.0
     liveness_votes = None
     liveness_total = None
+    required_blinks = 0
 
     if config.LIVENESS_ENABLED:
         min_blinks = int(getattr(config, "LIVENESS_BLINK_MIN_COUNT", 1))
@@ -146,6 +202,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             max_blinks = min_blinks
         required_blinks = random.randint(min_blinks, max_blinks)
 
+        t_liveness_start = time.perf_counter()
         _info(f"Silakan BERKEDIP {required_blinks} kali untuk verifikasi liveness...")
         if state_callback:
             state_callback(
@@ -203,6 +260,10 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 # feed ke mediapipe blink detector
                 ear_result = blink_detector.update(crop)
 
+                # kumpulkan EAR untuk PerfCollector
+                if ear_result is not None:
+                    _ear_vals.append(ear_result)
+
                 # jika mediapipe return None = landmark tidak ditemukan di crop
                 # artinya orang mungkin geser/miring → force redetect frame berikutnya
                 if ear_result is None and blink_detector.mode == "mediapipe":
@@ -246,6 +307,9 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                         getattr(config, 'WEB_PORT', 5000),
                         active=False)
+            _record("ERROR", nama_arg=nama,
+                    lv_required=required_blinks, lv_detected=live_blinks,
+                    lv_result="ERROR", lv_score=0.0)
             if state_callback:
                 state_callback(
                     step="Wajah Hilang",
@@ -287,6 +351,9 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                         getattr(config, 'WEB_PORT', 5000),
                         active=False, liveness_status=lv_status)
+            _record("DENIED_SPOOF", nama_arg=nama,
+                    lv_required=required_blinks, lv_detected=blinks,
+                    lv_result=lv_status, lv_score=liveness_score)
             if state_callback:
                 state_callback(
                     step="Tidak Ada Kedipan",
@@ -306,6 +373,9 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                         getattr(config, 'WEB_PORT', 5000),
                         active=False, liveness_status=lv_status)
+            _record("DENIED_SPOOF", nama_arg=nama,
+                    lv_required=required_blinks, lv_detected=blinks,
+                    lv_result=lv_status, lv_score=liveness_score)
             if state_callback:
                 state_callback(
                     step="Liveness Gagal",
@@ -347,6 +417,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             )
 
     #-----TAHAP 2: VERIFIKASI WAJAH-----
+    t_verify_start = time.perf_counter()
     _info("Memverifikasi identitas ...")
     if state_callback:
         state_callback(
@@ -427,6 +498,10 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
         _fail(f"AKSES DITOLAK — Wajah tidak cocok ({pct:.1f}% < {thr:.0f}%)")
         db.catat_log(uid_str, "DENIED_FACE", f"Face {pct:.1f}% < {thr:.0f}%",
                      user_id=user['id'], nama=nama)
+        _record("DENIED_FACE", nama_arg=nama,
+                similarity=score, match=False,
+                lv_required=required_blinks, lv_detected=live_blinks,
+                lv_result=lv_status, lv_score=liveness_score)
         if state_callback:
             state_callback(
                 step=f"Wajah tidak cocok ({pct:.1f}%)",
@@ -449,6 +524,10 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 active=False, liveness_status=lv_status)
 
     waktu1, _ = _report_timing(waktu2)
+    _record("GRANTED", nama_arg=nama,
+            similarity=score, match=True,
+            lv_required=required_blinks, lv_detected=live_blinks,
+            lv_result=lv_status, lv_score=liveness_score)
 
     if state_callback:
         state_callback(
