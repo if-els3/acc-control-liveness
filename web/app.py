@@ -61,23 +61,16 @@ _rt_overlay = {
 }
 
 # ── Resource contention flag ─────────────────────────────────────────────────
-# Saat liveness sedang berjalan di thread utama, MediaPipe FaceMesh memakan
-# hampir seluruh CPU Raspi. Jika Flask stream thread ikut memanggil BlazeFace
-# detect_largest() bersamaan, FPS liveness drop dari ~15 ke 6-9 FPS.
-# Flag ini memberitahu _mjpeg_generator agar skip face detection
-# (hanya stream frame mentah) selama liveness berlangsung.
-_liveness_busy = False
-_liveness_busy_lock = threading.Lock()
+# Penghapusan detect_largest() di stream generator karena bbox sudah disuplai
+# dari menus/access.py via /api/rt-overlay. Ini menghilangkan FPS drop.
+
 
 def set_liveness_busy(busy: bool):
-    """Dipanggil dari menus/access.py sebelum/sesudah sesi liveness."""
-    global _liveness_busy
-    with _liveness_busy_lock:
-        _liveness_busy = busy
+    pass
 
 def is_liveness_busy() -> bool:
-    with _liveness_busy_lock:
-        return _liveness_busy
+    return False
+
 
 # ── Autentikasi ──────────────────────────────────────────────────────────────
 
@@ -195,21 +188,16 @@ def _mjpeg_generator():
             # Tampilkan FPS di pojok kanan atas
             cv2.putText(frame, f"FPS: {int(fps_val)}", (frame.shape[1] - 70, 20), font, 0.5, (0, 255, 255), 1)
 
-            # Draw face box if face engine available
-            # CATATAN: Skip face detection saat liveness sedang berjalan
-            # agar tidak berkompetisi CPU dengan MediaPipe FaceMesh.
-            face_box_data = None
-            if _face_engine and _face_engine.is_loaded() and not is_liveness_busy():
-                box = _face_engine.detect_largest(frame)
-                if box:
-                    x1, y1, x2, y2, score = [int(v) for v in box]
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"Face {score:.2f}", (x1, y1-10), font, 0.5, (0,255,0), 1)
-                    face_box_data = (x1, y1, x2, y2)
-
             # Real-time overlay on face box
             with _rt_lock:
                 rt = dict(_rt_overlay)
+
+            # Gambar bounding box wajah jika disuplai oleh backend via rt-overlay
+            face_box_data = rt.get("face_box")
+            if face_box_data:
+                x1, y1, x2, y2 = face_box_data
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+                cv2.putText(frame, "Face", (x1, y1-10), font, 0.5, (255,255,255), 1)
 
             if rt.get("active") and face_box_data:
                 x1, y1, x2, y2 = face_box_data
@@ -294,7 +282,7 @@ def api_rt_overlay():
             return jsonify({"error": "Unauthorized"}), 401
         data = request.json or {}
         with _rt_lock:
-            for k in ["similarity", "blinks", "liveness_status", "active"]:
+            for k in ["similarity", "blinks", "liveness_status", "active", "face_box"]:
                 if k in data:
                     _rt_overlay[k] = data[k]
         return jsonify({"status": "ok"})
@@ -696,25 +684,38 @@ _HTML = r"""<!DOCTYPE html>
     position: absolute; bottom: 0; left: 0; right: 0;
     z-index: 20;
     display: flex; justify-content: center;
-    padding: 0 20px 28px;
+    padding: 0 20px 40px;
     pointer-events: none;
-    transform: translateY(120%);
-    transition: transform 0.55s cubic-bezier(0.16, 1, 0.3, 1);
-    will-change: transform;
+    transform: translateY(150px) scale(0.95);
+    opacity: 0;
+    transition: transform 0.65s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease;
+    will-change: transform, opacity;
+    perspective: 1000px;
   }
-  .status-card.active { transform: translateY(0); }
+  .status-card.active { 
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
 
   .glass-card {
-    background: var(--surface);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    padding: 20px 32px 22px;
-    min-width: min(460px, 90vw);
+    background: linear-gradient(135deg, rgba(20, 28, 50, 0.8), rgba(12, 18, 35, 0.6));
+    backdrop-filter: blur(24px) saturate(200%);
+    -webkit-backdrop-filter: blur(24px) saturate(200%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-top: 1px solid rgba(255,255,255,0.15);
+    border-radius: 24px;
+    padding: 24px 36px 26px;
+    min-width: min(480px, 92vw);
     max-width: 600px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04);
-    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    box-shadow: 0 30px 60px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.02), inset 0 1px 0 rgba(255,255,255,0.1);
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    transform: rotateX(5deg);
+    transform-style: preserve-3d;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+  }
+  .glass-card:hover {
+    transform: rotateX(0deg) translateY(-5px);
+    box-shadow: 0 40px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04), inset 0 1px 0 rgba(255,255,255,0.15);
   }
 
   /* Step badge */
@@ -729,9 +730,12 @@ _HTML = r"""<!DOCTYPE html>
   .step-badge.rfid    { background: rgba(59,130,246,0.2); border-color: rgba(59,130,246,0.5); color: #93c5fd; }
   .step-badge.verify  { background: rgba(139,92,246,0.2); border-color: rgba(139,92,246,0.5); color: #c4b5fd; }
   .step-badge.liveness{ background: rgba(245,158,11,0.2); border-color: rgba(245,158,11,0.5); color: #fcd34d; }
+  .step-badge.liveness_pass{ background: rgba(139,92,246,0.25); border-color: rgba(139,92,246,0.6); color: #ddd6fe; }
   .step-badge.granted { background: rgba(34,197,94,0.25); border-color: rgba(34,197,94,0.6); color: #86efac;
     box-shadow: 0 0 20px rgba(34,197,94,0.25); }
-  .step-badge.denied  { background: rgba(239,68,68,0.2); border-color: rgba(239,68,68,0.5); color: #fca5a5; }
+  .step-badge.denied  { background: rgba(239,68,68,0.25); border-color: rgba(239,68,68,0.6); color: #fca5a5;
+    box-shadow: 0 0 20px rgba(239,68,68,0.25); }
+  .step-badge.error   { background: rgba(239,68,68,0.3); border-color: rgba(239,68,68,0.8); color: #fff; }
 
   .badge-dot {
     width: 7px; height: 7px; border-radius: 50%; background: currentColor;
@@ -829,14 +833,17 @@ _HTML = r"""<!DOCTYPE html>
   </div>
 
 <script>
-const BADGE_CLASSES = ['idle','rfid','verify','liveness','granted','denied'];
+const BADGE_CLASSES = ['idle','rfid','verify','liveness','liveness_pass','liveness_skip','granted','denied','error'];
 const BADGE_MAP = {
-  idle    : { text: 'Standby',          cls: 'idle',     msg: 'Silakan tap kartu RFID' },
-  rfid    : { text: 'Tap Kartu RFID',   cls: 'rfid',     msg: 'Tempelkan kartu ke reader...' },
-  verify  : { text: 'Verifikasi Wajah', cls: 'verify',   msg: 'Hadapkan wajah ke kamera' },
-  liveness: { text: 'Liveness Check',   cls: 'liveness', msg: 'Silakan berkedip sesuai instruksi' },
-  granted : { text: 'Akses Diberikan ✓',cls: 'granted',  msg: 'Selamat datang!' },
-  denied  : { text: 'Akses Ditolak ✗',  cls: 'denied',   msg: 'Identitas tidak dikenali' },
+  idle         : { text: 'Standby',          cls: 'idle',          msg: 'Silakan tap kartu RFID' },
+  rfid         : { text: 'Tap Kartu RFID',   cls: 'rfid',          msg: 'Tempelkan kartu ke reader...' },
+  verify       : { text: 'Verifikasi Wajah', cls: 'verify',        msg: 'Hadapkan wajah ke kamera' },
+  liveness     : { text: 'Liveness Check',   cls: 'liveness',      msg: 'Silakan berkedip sesuai instruksi' },
+  liveness_pass: { text: 'Liveness Lolos',   cls: 'liveness_pass', msg: 'Melanjutkan ke verifikasi wajah...' },
+  liveness_skip: { text: 'Liveness Mati',    cls: 'idle',          msg: 'Liveness dinonaktifkan' },
+  granted      : { text: 'Akses Diberikan ✓',cls: 'granted',       msg: 'Selamat datang!' },
+  denied       : { text: 'Akses Ditolak ✗',  cls: 'denied',        msg: 'Identitas tidak dikenali' },
+  error        : { text: 'Sistem Error ⚠',   cls: 'error',         msg: 'Terjadi kesalahan sistem' },
 };
 
 let hideTimer = null;

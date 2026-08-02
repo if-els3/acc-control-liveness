@@ -56,6 +56,10 @@ def _rt_overlay(host, port, **kwargs):
     if not _HTTP_OK or urllib is None:
         return
     try:
+        # Konversi array face_box numpy ke list int agar bisa di-serialize ke JSON
+        if "face_box" in kwargs and kwargs["face_box"] is not None:
+            kwargs["face_box"] = [int(v) for v in kwargs["face_box"]]
+            
         url = f"http://{host}:{port}/api/rt-overlay"
         data = json.dumps(kwargs).encode()
         req = urllib.request.Request(url, data=data,
@@ -289,8 +293,8 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                             getattr(config, 'WEB_PORT', 5000),
                             blinks=live_blinks,
-                            liveness_status="Cek..."
-                        )
+                            liveness_status="Cek...",
+                            face_box=face_box)
                 if live_blinks >= required_blinks:
                     if _blink_achieved_at is None:
                         _blink_achieved_at = time.time()
@@ -350,7 +354,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                          user_id=user['id'], nama=nama)
             _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                         getattr(config, 'WEB_PORT', 5000),
-                        active=False, liveness_status=lv_status)
+                        active=False, liveness_status=lv_status, face_box=face_box)
             _record("DENIED_SPOOF", nama_arg=nama,
                     lv_required=required_blinks, lv_detected=blinks,
                     lv_result=lv_status, lv_score=liveness_score)
@@ -372,7 +376,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                          user_id=user['id'], nama=nama)
             _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                         getattr(config, 'WEB_PORT', 5000),
-                        active=False, liveness_status=lv_status)
+                        active=False, liveness_status=lv_status, face_box=face_box)
             _record("DENIED_SPOOF", nama_arg=nama,
                     lv_required=required_blinks, lv_detected=blinks,
                     lv_result=lv_status, lv_score=liveness_score)
@@ -402,7 +406,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             )
         _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                     getattr(config, 'WEB_PORT', 5000),
-                    active=False, liveness_status=lv_status)
+                    active=False, liveness_status=lv_status, face_box=face_box)
     else:
         waktu2 = None
         if state_callback:
@@ -443,7 +447,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             )
         _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                     getattr(config, 'WEB_PORT', 5000),
-                    similarity=sc, active=True)
+                    similarity=sc, active=True, face_box=face_box)
 
     if config.LIVENESS_ENABLED and face_crops_cached:
         #-----VERIFY DARI CACHED CROPS-----
@@ -468,6 +472,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             if face_engine.detect_largest(frame) is not None:
                 if t_face_detect is None:
                     t_face_detect = time.perf_counter()
+                face_box = face_engine.detect_largest(frame)[:4] # simpan face_box
                 verify_frames.append(frame)
             time.sleep(0.1)
 
@@ -521,7 +526,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     door.open(duration=config.DOOR_OPEN_SEC)
     _rt_overlay(getattr(config, 'WEB_HOST', 'localhost'),
                 getattr(config, 'WEB_PORT', 5000),
-                active=False, liveness_status=lv_status)
+                active=False, liveness_status=lv_status, face_box=face_box)
 
     waktu1, _ = _report_timing(waktu2)
     _record("GRANTED", nama_arg=nama,
