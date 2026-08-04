@@ -82,6 +82,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
     t_rfid_start    = time.perf_counter()
     t_rfid          = time.perf_counter()  # alias lama (dipakai _report_timing)
     t_face_detect   = None
+    t_blazeface_dur = 0.0
     t_liveness_start = None
     t_verify_start  = None
 
@@ -109,8 +110,7 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             return
         now = time.perf_counter()
         t_rfid_dur   = (t_liveness_start or t_verify_start or now) - t_rfid_start
-        t_face_dur   = max(0.0, (t_liveness_start - t_face_detect)
-                          if (t_liveness_start and t_face_detect) else 0.0)
+        t_face_dur   = t_blazeface_dur
         t_live_dur   = max(0.0, (t_verify_start - t_liveness_start)
                           if (t_verify_start and t_liveness_start) else 0.0)
         t_ver_dur    = max(0.0, now - t_verify_start if t_verify_start else 0.0)
@@ -246,7 +246,9 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
             #-----DETEKSI WAJAH (LAZY)-----
             if face_box is None or force_redetect:
                 # pertama kali atau mediapipe gagal → jalankan blazeface
+                t_bf = time.perf_counter()
                 box = face_engine.detect_largest(frame)
+                t_blazeface_dur += (time.perf_counter() - t_bf)
                 force_redetect = False
                 if box is None:
                     time.sleep(0.05)
@@ -419,6 +421,28 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                 liveness_status="",
                 message="Liveness dinonaktifkan, lanjut verifikasi wajah"
             )
+        #-----FALLBACK PENGUMPULAN CROPS (JIKA LIVENESS OFF)-----
+        t0 = time.time()
+        target_v = config.ENROLL_FRAMES
+        while len(face_crops_cached) < target_v and time.time() - t0 < 3.0:
+            frame = cam.read()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            
+            t_bf = time.perf_counter()
+            box = face_engine.detect_largest(frame)
+            t_blazeface_dur += (time.perf_counter() - t_bf)
+            
+            if box is not None:
+                if t_face_detect is None:
+                    t_face_detect = time.perf_counter()
+                face_box = box[:4]
+                x1, y1, x2, y2 = [int(v) for v in face_box]
+                crop = frame[max(0,y1):y2, max(0,x1):x2]
+                if crop.size > 0:
+                    face_crops_cached.append(crop)
+            time.sleep(0.1)
 
     #-----TAHAP 2: VERIFIKASI WAJAH-----
     t_verify_start = time.perf_counter()
@@ -449,52 +473,32 @@ def _proses_akses(uid_str, db, face_engine, liveness, door, cam, state_callback=
                     getattr(config, 'WEB_PORT', 5000),
                     similarity=sc, active=True, face_box=face_box)
 
-    if config.LIVENESS_ENABLED and face_crops_cached:
+    if face_crops_cached:
         #-----VERIFY DARI CACHED CROPS-----
-        # gunakan crops yang sudah dikumpulkan saat liveness loop
-        # skip blazeface re-detect → langsung ke mobilefacenet
-        # ini eliminasi ~10 redundant inference di phase 2
+        # Sama-sama menggunakan verify_multi_crop baik dari liveness maupun fallback
         log.debug(f"verify_multi_crop: {len(face_crops_cached)} cached crops")
         match, score = face_engine.verify_multi_crop(
             face_crops_cached, stored_embs, min_votes=2, callback=_sim_callback
         )
     else:
-        #-----FALLBACK: liveness off atau tidak ada cached crops-----
-        # kumpulkan frame baru dan detect dari awal (path lama)
-        verify_frames = []
-        t0 = time.time()
-        target_v = config.ENROLL_FRAMES
-        while len(verify_frames) < target_v and time.time() - t0 < 3.0:
-            frame = cam.read()
-            if frame is None:
-                time.sleep(0.05)
-                continue
-            if face_engine.detect_largest(frame) is not None:
-                if t_face_detect is None:
-                    t_face_detect = time.perf_counter()
-                face_box = face_engine.detect_largest(frame)[:4] # simpan face_box
-                verify_frames.append(frame)
-            time.sleep(0.1)
-
-        if not verify_frames:
-            _fail("GAGAL — Wajah tidak terdeteksi untuk verifikasi")
-            db.catat_log(uid_str, "ERROR", "Wajah tidak terdeteksi saat verifikasi",
-                         user_id=user['id'], nama=nama)
-            if state_callback:
-                state_callback(
-                    step="Wajah tidak terdeteksi",
-                    step_code="error",
-                    user_name=nama,
-                    similarity=None,
-                    blinks=live_blinks,
-                    liveness_status=lv_status,
-                    message="Gagal mendeteksi wajah untuk verifikasi identitas"
-                )
-            return "ERROR"
-
-        match, score = face_engine.verify_multi_frame(
-            verify_frames, stored_embs, min_votes=2, callback=_sim_callback
-        )
+        # Gagal dari liveness atau fallback
+        _fail("GAGAL — Wajah tidak terdeteksi untuk verifikasi")
+        db.catat_log(uid_str, "ERROR", "Wajah tidak terdeteksi saat verifikasi",
+                     user_id=user['id'], nama=nama)
+        _record("ERROR", nama_arg=nama,
+                lv_required=required_blinks, lv_detected=live_blinks,
+                lv_result=lv_status, lv_score=liveness_score)
+        if state_callback:
+            state_callback(
+                step="Wajah tidak terdeteksi",
+                step_code="error",
+                user_name=nama,
+                similarity=None,
+                blinks=live_blinks,
+                liveness_status=lv_status,
+                message="Gagal mendeteksi wajah untuk verifikasi identitas"
+            )
+        return "ERROR"
 
     pct = score * 100
     thr = config.FACE_MATCH_THRESH * 100
