@@ -230,8 +230,46 @@ class FaceEngine:
                     results.append((x1, y1, x2, y2, float(score)))
         return results
 
+    def detect_with_landmarks(self, frame_bgr: np.ndarray) -> List[Tuple]:
+        if not self._loaded or self.net is None:
+            return []
+            
+        h_orig, w_orig = frame_bgr.shape[:2]
+        frame_resized = cv2.resize(frame_bgr, (128, 128))
+        frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+        
+        with torch.no_grad():
+            detections = self.net.predict_on_image(frame_rgb)
+        
+        if torch.is_tensor(detections):
+            detections = detections.cpu().numpy()
+
+        results = []
+        if detections is not None and len(detections) > 0:
+            for i in range(len(detections)):
+                ymin, xmin, ymax, xmax = detections[i, 0:4]
+                score = detections[i, 16]
+                
+                if score >= config.DETECT_CONFIDENCE:
+                    x1, y1 = int(xmin * w_orig), int(ymin * h_orig)
+                    x2, y2 = int(xmax * w_orig), int(ymax * h_orig)
+                    
+                    keypoints = []
+                    for k in range(6):
+                        kp_x = int(detections[i, 4 + k*2] * w_orig)
+                        kp_y = int(detections[i, 4 + k*2 + 1] * h_orig)
+                        keypoints.append((kp_x, kp_y))
+                        
+                    results.append((x1, y1, x2, y2, float(score), keypoints))
+        return results
+
     def detect_largest(self, frame_bgr: np.ndarray) -> Optional[Tuple]:
         boxes = self.detect(frame_bgr)
+        if not boxes: return None
+        return max(boxes, key=lambda b: (b[2]-b[0]) * (b[3]-b[1]))
+
+    def detect_largest_with_landmarks(self, frame_bgr: np.ndarray) -> Optional[Tuple]:
+        boxes = self.detect_with_landmarks(frame_bgr)
         if not boxes: return None
         return max(boxes, key=lambda b: (b[2]-b[0]) * (b[3]-b[1]))
 

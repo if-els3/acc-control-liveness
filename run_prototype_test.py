@@ -136,7 +136,7 @@ def uji_blazeface(engine: FaceEngine, frames: list):
 
     for i, frame in enumerate(frames):
         t0  = time.perf_counter()
-        boxes = engine.detect(frame)
+        boxes = engine.detect_with_landmarks(frame)
         inf_ms = (time.perf_counter() - t0) * 1000
 
         detected = len(boxes) > 0
@@ -641,11 +641,32 @@ def save_01_landmarks(base_frame, face_landmarks_result):
 def save_03_blazeface(base_frame, boxes):
     H, W = base_frame.shape[:2]
     canvas = base_frame.copy()
-    for i, (x1,y1,x2,y2,score) in enumerate(boxes):
+    for i, box in enumerate(boxes):
+        if len(box) == 6:
+            x1, y1, x2, y2, score, keypoints = box
+        else:
+            x1, y1, x2, y2, score = box
+            keypoints = []
+            
         cv2.rectangle(canvas, (x1,y1), (x2,y2), CLR_GREEN, 2)
         _txt(canvas, f"FACE #{i+1} conf={score:.3f}", (x1+4, y1-5), 0.5, CLR_CYAN)
-    _header(canvas, "OUTPUT 03 — BlazeFace Detection",
-            f"{len(boxes)} face(s) detected", bar=(10,30,20))
+        
+        # Analyze Face Crop for Paper Testing (HVS vs Glossy vs Color)
+        face_crop = base_frame[max(0, y1):min(H, y2), max(0, x1):min(W, x2)]
+        if face_crop.size > 0:
+            gray_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY)
+            mean_brightness = np.mean(gray_crop)
+            contrast = np.std(gray_crop)
+            hsv_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2HSV)
+            mean_saturation = np.mean(hsv_crop[:, :, 1])
+            _txt(canvas, f"B:{mean_brightness:.1f} C:{contrast:.1f} S:{mean_saturation:.1f}", (x1+4, y2+15), 0.4, CLR_YELLOW)
+        
+        # Draw BlazeFace Simple Landmarks
+        for kx, ky in keypoints:
+            cv2.circle(canvas, (kx, ky), 3, CLR_ORANGE, -1)
+            
+    _header(canvas, "OUTPUT 03 — BlazeFace with Landmarks & Paper Metrics",
+            f"{len(boxes)} face(s) | Orange=BlazeFace LMs | B=Brightness C=Contrast S=Saturation", bar=(10,30,20))
     path = os.path.join(IMG_DIR, "03_blazeface_detection.jpg")
     cv2.imwrite(path, canvas)
     print(f"  03_blazeface_detection.jpg ({len(boxes)} faces)")
@@ -749,11 +770,11 @@ def main():
     print(f"          {len(frames)} frame ({base_frame.shape[1]}x{base_frame.shape[0]})")
 
     # ── Shared detection for visual outputs ───────────────────
-    boxes = engine.detect(base_frame)
+    boxes = engine.detect_with_landmarks(base_frame)
     best_box  = max(boxes, key=lambda b:(b[2]-b[0])*(b[3]-b[1])) if boxes else None
     face_crop = None
     if best_box:
-        x1,y1,x2,y2,_ = best_box
+        x1,y1,x2,y2 = best_box[0:4]
         face_crop = base_frame[max(0,y1):y2, max(0,x1):x2]
 
     face_landmarks_result = None
